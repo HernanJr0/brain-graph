@@ -19,6 +19,8 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	hoverPulses: true,
 	ambientPulses: true,
 	ambientCount: 45,
+	idleAnimation: true,
+	surface: true,
 	settingsVersion: 2,
 	groupBy: "links",
 	showOrphans: true,
@@ -68,6 +70,18 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 				t.setValue(s.showOrphans).onChange((v) => {
 					s.showOrphans = v;
 					void save("keep");
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Superfície do cérebro")
+			.setDesc(
+				"Ligada: superfície escura semitransparente com as notas por fora e links em arco. Desligada: nuvem de pontos transparente com as notas dentro do córtex e links mergulhando para o centro.",
+			)
+			.addToggle((t) =>
+				t.setValue(s.surface).onChange((v) => {
+					s.surface = v;
+					void save();
 				}),
 			);
 
@@ -124,6 +138,16 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 						s.ambientCount = v;
 						void save();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Animação em repouso")
+			.setDesc("Depois de ~3 s sem mexer, uma onda de atividade lenta percorre o cérebro e o brilho respira de leve.")
+			.addToggle((t) =>
+				t.setValue(s.idleAnimation).onChange((v) => {
+					s.idleAnimation = v;
+					void save();
+				}),
 			);
 
 		new Setting(containerEl)

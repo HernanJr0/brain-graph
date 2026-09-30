@@ -45,6 +45,13 @@ export interface RenderOptions {
 	/** Sinais lentos percorrendo o cérebro o tempo todo. */
 	ambientPulses: boolean;
 	ambientCount: number;
+	/** Onda de atividade e respiração sutis quando ninguém está mexendo. */
+	idleAnimation: boolean;
+	/**
+	 * Superfície do cérebro semitransparente (notas por fora, links em arco) ou
+	 * nuvem de pontos transparente (notas dentro do córtex, links mergulhando para o centro).
+	 */
+	surface: boolean;
 }
 
 export interface RendererCallbacks {
@@ -83,6 +90,14 @@ const ORPHAN_COLOR = new Color("#8391b0");
 const EDGE_SEGMENTS = 6;
 /** Centro usado para arcos entre hemisférios (passam por cima da fissura). */
 const MIDLINE = [0, HEMI_CENTER[1], HEMI_CENTER[2]];
+/** Modo nuvem: links longos mergulham para este ponto (substância branca). */
+const FIBER_CENTER = [0, 0.05, -0.1];
+/**
+ * O layout guarda as notas logo acima da superfície. No modo nuvem elas são aproximadas do centro
+ * na hora de desenhar (ficam dentro do córtex / cerebelo); as posições salvas não mudam.
+ */
+const CLOUD_CORTEX_SCALE = 0.88;
+const CLOUD_CEREB_SCALE = 0.7;
 /** Opacidade da superfície do cérebro: deixa o lado de trás levemente visível. */
 const SURFACE_OPACITY = 0.85;
 
@@ -103,12 +118,13 @@ void main() {
 // Sombreamento de "farol" (luz vinda da câmera) + contorno suave nas bordas: dá volume sem luzes na cena.
 const SURFACE_FRAG = /* glsl */ `
 uniform float uOpacity;
+uniform float uRim;
 varying vec3 vNormal;
 varying vec3 vView;
 varying vec3 vColor;
 void main() {
 	float ndv = abs(dot(normalize(vNormal), normalize(vView)));
-	vec3 c = vColor * (0.45 + 0.8 * ndv) + vec3(0.2, 0.28, 0.46) * pow(1.0 - ndv, 2.5) * 0.5;
+	vec3 c = vColor * (0.45 + 0.8 * ndv) + vec3(0.2, 0.28, 0.46) * pow(1.0 - ndv, 2.5) * 0.5 * uRim;
 	gl_FragColor = vec4(c, uOpacity);
 }`;
 
@@ -130,6 +146,8 @@ const AMBIENT_MAX = 150;
 const AMBIENT_FRAME_MS = 31;
 /** Intensidade dos pulsos ambientes (mais discretos que os do hover). */
 const AMBIENT_INTENSITY = 0.45;
+/** Tempo sem interação até a animação de repouso começar. */
+const IDLE_DELAY_MS = 3000;
 /** Meta: nunca abaixo de 20 fps. O governador reduz a resolução se o frame passar disso. */
 const SLOW_FRAME_MS = 50;
 
@@ -144,6 +162,9 @@ uniform float uFocus;
 uniform float uMinSize;
 uniform float uMaxSize;
 uniform float uSizeScale;
+uniform float uTime;
+uniform float uIdle;
+uniform float uWave;
 uniform vec3 uBg;
 varying vec3 vColor;
 varying float vDim;
@@ -151,10 +172,12 @@ void main() {
 	vec4 mv = modelViewMatrix * vec4(position, 1.0);
 	gl_Position = projectionMatrix * mv;
 	float px = uOrtho > 0.5 ? aSize * uScale : aSize * uScale / max(-mv.z, 0.001);
-	px *= (1.0 + aHighlight * 0.5) * uSizeScale;
+	// Onda de atividade (repouso): faixa estreita que varre o cérebro de trás para a frente.
+	float wave = pow(0.5 + 0.5 * sin(uTime * 0.55 - position.z * 2.2 - position.y * 0.8), 6.0) * uIdle * uWave;
+	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.25);
 	gl_PointSize = clamp(px, uMinSize, uMaxSize) * uPixelRatio;
 	vDim = uFocus * (1.0 - step(0.5, aHighlight));
-	vColor = mix(aColor, uBg, vDim * 0.8);
+	vColor = mix(mix(aColor, uBg, vDim * 0.8), vec3(1.0), wave * 0.3);
 }`;
 
 const FRAG = /* glsl */ `
@@ -169,12 +192,13 @@ void main() {
 /** Halo: queda suave do centro para a borda, somado à cena (aditivo). Some quando o nó está fora de foco. */
 const HALO_FRAG = /* glsl */ `
 uniform float uIntensity;
+uniform float uBreath;
 varying vec3 vColor;
 varying float vDim;
 void main() {
 	float d = length(gl_PointCoord - 0.5) * 2.0;
 	if (d > 1.0) discard;
-	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 - vDim * 0.85);
+	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 + uBreath) * (1.0 - vDim * 0.85);
 	gl_FragColor = vec4(vColor, a);
 }`;
 
@@ -188,6 +212,9 @@ function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 			uMinSize: { value: minSize },
 			uMaxSize: { value: MAX_POINT_PX },
 			uSizeScale: { value: 1 },
+			uTime: { value: 0 },
+			uIdle: { value: 0 },
+			uWave: { value: 0 },
 			uBg: { value: BG },
 		},
 		vertexShader: VERT,
@@ -212,6 +239,7 @@ function haloMaterial(): ShaderMaterial {
 	m.uniforms.uSizeScale.value = 2.3;
 	m.uniforms.uMaxSize.value = MAX_HALO_PX;
 	m.uniforms.uIntensity = { value: 0.2 };
+	m.uniforms.uBreath = { value: 0 };
 	m.transparent = true;
 	m.blending = AdditiveBlending;
 	return m;
@@ -249,7 +277,7 @@ export class BrainRenderer {
 	private readonly shellMat = pointMaterial(1, true);
 	private readonly surfaces: Mesh[] = [];
 	private readonly surfaceMat = new ShaderMaterial({
-		uniforms: { uOrtho: { value: 0 }, uOpacity: { value: SURFACE_OPACITY } },
+		uniforms: { uOrtho: { value: 0 }, uOpacity: { value: SURFACE_OPACITY }, uRim: { value: 1 } },
 		vertexShader: SURFACE_VERT,
 		fragmentShader: SURFACE_FRAG,
 		side: DoubleSide,
@@ -269,6 +297,8 @@ export class BrainRenderer {
 	private graph?: GraphCore;
 	private layout?: BrainLayout;
 	private nodes?: Points;
+	/** Posições de exibição (layout ajustado ao modo superfície/nuvem). */
+	private view = new Float32Array(0);
 	/** Compartilha a geometria dos nós; só muda o material. */
 	private halo?: Points;
 	private readonly pulseMat = pulseMaterial();
@@ -291,6 +321,11 @@ export class BrainRenderer {
 	/** Frame pedido por interação/mudança (desenha já) vs. continuação de animação (pode esperar o ritmo de 30 fps). */
 	private urgent = true;
 	private lastRender = 0;
+	/** 0 = interagindo, 1 = em repouso (transição suave). */
+	private idleMix = 0;
+	private idleTime = 0;
+	private idleLast = 0;
+	private lastInteraction = 0;
 	private pulseLast = 0;
 	private readonly pulseColor = new Color();
 	private edges?: LineSegments;
@@ -352,6 +387,10 @@ export class BrainRenderer {
 		this.shell = new Points(pointGeometry(shell.positions, shell.colors, shellSize), this.shellMat);
 		this.shell.frustumCulled = false;
 		this.shell.renderOrder = 0;
+		// Intensidade da onda de repouso por camada: marcos anatômicos um pouco mais que os nós.
+		this.shellMat.uniforms.uWave.value = 1.2;
+		this.nodeMat.uniforms.uWave.value = 0.8;
+		this.haloMat.uniforms.uWave.value = 0.8;
 
 		// Superfície quase opaca. Ordem de desenho: nós e links (escrevem profundidade) -> superfície
 		// (encobre 85% do que está atrás dela) -> halos e pulsos (os de trás ficam escondidos).
@@ -453,6 +492,7 @@ export class BrainRenderer {
 		const modeChanged = partial.mode !== undefined && partial.mode !== this.opts.mode;
 		const sizeChanged = partial.nodeSize !== undefined && partial.nodeSize !== this.opts.nodeSize;
 		const ambientChanged = partial.ambientCount !== undefined && partial.ambientCount !== this.opts.ambientCount;
+		const surfaceChanged = partial.surface !== undefined && partial.surface !== this.opts.surface;
 		this.opts = { ...this.opts, ...partial };
 		if (modeChanged) {
 			const dir = this.camera.position.clone().sub(this.controls.target).normalize();
@@ -461,6 +501,10 @@ export class BrainRenderer {
 		}
 		if (sizeChanged) this.buildNodes();
 		if (ambientChanged) this.buildAmbient();
+		if (surfaceChanged) {
+			this.syncView();
+			this.syncEdgePositions();
+		}
 		this.setupPulses();
 		this.applyOptions();
 		this.refreshFocus();
@@ -568,6 +612,7 @@ export class BrainRenderer {
 			c.maxDistance = 9;
 		}
 		c.addEventListener("change", this.requestFrame);
+		c.addEventListener("change", this.markInteraction);
 		c.addEventListener("start", this.onControlsStart);
 		c.addEventListener("end", this.onControlsEnd);
 		this.controls = c;
@@ -588,7 +633,11 @@ export class BrainRenderer {
 
 	private applyOptions(): void {
 		this.shell.visible = this.opts.showCortex;
-		for (const m of this.surfaces) m.visible = this.opts.showCortex;
+		const surface = this.opts.surface && this.opts.showCortex;
+		for (const m of this.surfaces) m.visible = surface;
+		// Com superfície, marcos e links escrevem profundidade (a superfície não os cobre na frente).
+		this.shellMat.depthWrite = surface;
+		this.edgeMat.depthWrite = surface;
 		this.surfaceMat.uniforms.uOrtho.value = this.opts.mode === "2d" ? 1 : 0;
 		const ortho = this.opts.mode === "2d" ? 1 : 0;
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) m.uniforms.uOrtho.value = ortho;
@@ -611,7 +660,9 @@ export class BrainRenderer {
 			this.color(g.group[i]).toArray(colors, i * 3);
 			sizes[i] = Math.min(0.09, 0.018 * this.opts.nodeSize * (0.8 + 0.4 * Math.sqrt(g.degree[i])));
 		}
-		this.nodes = new Points(pointGeometry(layout.pos, colors, sizes), this.nodeMat);
+		this.view = new Float32Array(n * 3);
+		this.syncView();
+		this.nodes = new Points(pointGeometry(this.view, colors, sizes), this.nodeMat);
 		this.nodes.frustumCulled = false;
 		this.nodes.renderOrder = 1;
 		this.scene.add(this.nodes);
@@ -704,7 +755,7 @@ export class BrainRenderer {
 		if (this.layout?.running) {
 			this.layout.stepFor(6);
 			keepGoing = true;
-			(this.nodes!.geometry.getAttribute("position") as BufferAttribute).needsUpdate = true;
+			this.syncView();
 			this.syncEdgePositions();
 			if (!this.layout.running) this.callbacks.onLayoutSettled?.(true);
 		}
@@ -712,6 +763,7 @@ export class BrainRenderer {
 		if (this.pickDirty && !this.dragging) this.pick();
 		if (this.updatePulses(now)) keepGoing = true;
 		if (this.updateAmbient(now)) keepGoing = true;
+		if (this.updateIdle(now)) keepGoing = true;
 		this.updateUniforms();
 		this.renderer.render(this.scene, this.camera);
 		this.updateLabels();
@@ -758,8 +810,9 @@ export class BrainRenderer {
 		if (!g || !this.edges || !this.layout) return;
 		const attr = this.edges.geometry.getAttribute("position") as BufferAttribute;
 		const out = attr.array as Float32Array;
-		const pos = this.layout.pos;
+		const pos = this.view;
 		const ctrl = this.edgeCtrl;
+		const surface = this.opts.surface;
 		const e = g.edges;
 		const m = e.length / 2;
 		const pt = this.pt;
@@ -772,42 +825,52 @@ export class BrainRenderer {
 			const dz = pos[b + 2] - pos[a + 2];
 			const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
 			this.edgeLen[k] = len;
-			// Arco por fora: o meio da curva fica logo acima da superfície; links longos sobem um pouco mais.
-			const mx = (pos[a] + pos[b]) * 0.5;
-			const my = (pos[a + 1] + pos[b + 1]) * 0.5;
-			const mz = (pos[a + 2] + pos[b + 2]) * 0.5;
-			let cx: number, cy: number, cz: number, vx: number, vy: number, vz: number, r: number;
-			if (pos[a] * pos[b] >= 0) {
-				const h = mx >= 0 ? 1 : -1;
-				cx = h * HEMI_CENTER[0];
-				cy = HEMI_CENTER[1];
-				cz = HEMI_CENTER[2];
-				vx = mx - cx;
-				vy = my - cy;
-				vz = mz - cz;
-				const vl = Math.hypot(vx, vy, vz) || 1e-6;
-				vx /= vl;
-				vy /= vl;
-				vz /= vl;
-				r = cortexRadius(h, vx, vy, vz) * 1.035 + 0.04 * len;
+			if (!surface) {
+				// Nuvem: links curtos retos; quanto mais longo, mais afunda em direção ao centro.
+				const x = Math.min(1, Math.max(0, (len - 0.3) / 0.9));
+				const bend = 0.7 * x * x * (3 - 2 * x);
+				for (let c = 0; c < 3; c++) {
+					const mid = (pos[a + c] + pos[b + c]) * 0.5;
+					ctrl[k * 3 + c] = mid + (FIBER_CENTER[c] - mid) * bend;
+				}
 			} else {
-				// Entre hemisférios: passa por cima da fissura longitudinal.
-				cx = MIDLINE[0];
-				cy = MIDLINE[1];
-				cz = MIDLINE[2];
-				vx = mx - cx;
-				vy = my - cy + 0.5;
-				vz = mz - cz;
-				const vl = Math.hypot(vx, vy, vz) || 1e-6;
-				vx /= vl;
-				vy /= vl;
-				vz /= vl;
-				r = 0.7 + 0.05 * len;
+				// Arco por fora: o meio da curva fica logo acima da superfície; links longos sobem um pouco mais.
+				const mx = (pos[a] + pos[b]) * 0.5;
+				const my = (pos[a + 1] + pos[b + 1]) * 0.5;
+				const mz = (pos[a + 2] + pos[b + 2]) * 0.5;
+				let cx: number, cy: number, cz: number, vx: number, vy: number, vz: number, r: number;
+				if (pos[a] * pos[b] >= 0) {
+					const h = mx >= 0 ? 1 : -1;
+					cx = h * HEMI_CENTER[0];
+					cy = HEMI_CENTER[1];
+					cz = HEMI_CENTER[2];
+					vx = mx - cx;
+					vy = my - cy;
+					vz = mz - cz;
+					const vl = Math.hypot(vx, vy, vz) || 1e-6;
+					vx /= vl;
+					vy /= vl;
+					vz /= vl;
+					r = cortexRadius(h, vx, vy, vz) * 1.035 + 0.04 * len;
+				} else {
+					// Entre hemisférios: passa por cima da fissura longitudinal.
+					cx = MIDLINE[0];
+					cy = MIDLINE[1];
+					cz = MIDLINE[2];
+					vx = mx - cx;
+					vy = my - cy + 0.5;
+					vz = mz - cz;
+					const vl = Math.hypot(vx, vy, vz) || 1e-6;
+					vx /= vl;
+					vy /= vl;
+					vz /= vl;
+					r = 0.7 + 0.05 * len;
+				}
+				// Bézier quadrática: ponto do meio = (a + 2c + b) / 4 -> c = 2·alvo − médio.
+				ctrl[k * 3] = 2 * (cx + vx * r) - mx;
+				ctrl[k * 3 + 1] = 2 * (cy + vy * r) - my;
+				ctrl[k * 3 + 2] = 2 * (cz + vz * r) - mz;
 			}
-			// Bézier quadrática: ponto do meio = (a + 2c + b) / 4 -> c = 2·alvo − médio.
-			ctrl[k * 3] = 2 * (cx + vx * r) - mx;
-			ctrl[k * 3 + 1] = 2 * (cy + vy * r) - my;
-			ctrl[k * 3 + 2] = 2 * (cz + vz * r) - mz;
 			for (let s = 0; s < EDGE_SEGMENTS; s++) {
 				this.edgePoint(k, s / EDGE_SEGMENTS, pt);
 				out[w++] = pt[0];
@@ -960,9 +1023,34 @@ export class BrainRenderer {
 		return true;
 	}
 
+	/** Copia o layout para as posições de exibição, aproximando do centro no modo nuvem. */
+	private syncView(): void {
+		const g = this.graph;
+		const layout = this.layout;
+		if (!g || !layout || this.view.length !== layout.pos.length) return;
+		const src = layout.pos;
+		const out = this.view;
+		if (this.opts.surface) out.set(src);
+		else {
+			const [ccx, ccy, ccz] = this.cerebCenter;
+			for (let i = 0; i < g.ids.length; i++) {
+				const o = i * 3;
+				const orphan = g.group[i] < 0;
+				const cx = orphan ? ccx : (src[o] >= 0 ? 1 : -1) * HEMI_CENTER[0];
+				const cy = orphan ? ccy : HEMI_CENTER[1];
+				const cz = orphan ? ccz : HEMI_CENTER[2];
+				const k = orphan ? CLOUD_CEREB_SCALE : CLOUD_CORTEX_SCALE;
+				out[o] = cx + (src[o] - cx) * k;
+				out[o + 1] = cy + (src[o + 1] - cy) * k;
+				out[o + 2] = cz + (src[o + 2] - cz) * k;
+			}
+		}
+		if (this.nodes) (this.nodes.geometry.getAttribute("position") as BufferAttribute).needsUpdate = true;
+	}
+
 	private edgePoint(k: number, t: number, out: number[]): void {
 		const e = this.graph!.edges;
-		const pos = this.layout!.pos;
+		const pos = this.view;
 		const a = e[k * 2] * 3;
 		const b = e[k * 2 + 1] * 3;
 		const u = 1 - t;
@@ -992,6 +1080,26 @@ export class BrainRenderer {
 		attr.needsUpdate = true;
 	}
 
+	/** Entra devagar após ~3 s sem interação e sai rápido ao mexer. Retorna true se precisa de mais frames. */
+	private updateIdle(now: number): boolean {
+		const dt = this.idleLast ? Math.max(0, Math.min(0.05, (now - this.idleLast) / 1000)) : 0;
+		this.idleLast = now;
+		const resting = !this.dragging && this.hover < 0 && performance.now() - this.lastInteraction > IDLE_DELAY_MS;
+		const target = this.opts.idleAnimation && resting ? 1 : 0;
+		this.idleMix += (target - this.idleMix) * Math.min(1, dt * (target ? 0.5 : 6));
+		if (this.idleMix < 0.001) this.idleMix = 0;
+		if (this.idleMix > 0) this.idleTime += dt;
+		const breath = this.idleMix * 0.5 * (1 + Math.sin(this.idleTime * 0.9));
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat]) {
+			m.uniforms.uTime.value = this.idleTime;
+			m.uniforms.uIdle.value = this.idleMix;
+		}
+		this.haloMat.uniforms.uBreath.value = breath * 0.35;
+		this.surfaceMat.uniforms.uRim.value = 1 + breath * 0.3;
+		// Precisa de frames enquanto a animação estiver ligada (repouso chega sozinho) ou em transição.
+		return this.opts.idleAnimation || this.idleMix > 0;
+	}
+
 	private updateUniforms(): void {
 		const pr = this.renderer.getPixelRatio();
 		const scale =
@@ -1006,7 +1114,12 @@ export class BrainRenderer {
 
 	// ---------- Interação ----------
 
+	private readonly markInteraction = (): void => {
+		this.lastInteraction = performance.now();
+	};
+
 	private readonly onPointerMove = (evt: PointerEvent): void => {
+		this.markInteraction();
 		this.mouseX = evt.offsetX;
 		this.mouseY = evt.offsetY;
 		this.mouseInside = true;
@@ -1022,6 +1135,7 @@ export class BrainRenderer {
 	};
 
 	private readonly onPointerDown = (evt: PointerEvent): void => {
+		this.markInteraction();
 		this.downX = evt.clientX;
 		this.downY = evt.clientY;
 	};
@@ -1033,8 +1147,8 @@ export class BrainRenderer {
 
 	/** O nó está no lado do cérebro voltado para a câmera? (Os de trás ficam esmaecidos pela superfície.) */
 	private facesCamera(i: number): boolean {
-		if (!this.opts.showCortex) return true;
-		const pos = this.layout!.pos;
+		if (!this.opts.showCortex || !this.opts.surface) return true;
+		const pos = this.view;
 		const o = i * 3;
 		let cx: number, cy: number, cz: number;
 		if (this.graph!.group[i] < 0) {
@@ -1060,7 +1174,7 @@ export class BrainRenderer {
 			this.viewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
 			const w = this.width;
 			const h = this.height;
-			const pos = this.layout.pos;
+			const pos = this.view;
 			let bestD = 12 * 12;
 			let bestZ = Infinity;
 			for (let i = 0; i < this.graph.ids.length; i++) {
@@ -1145,7 +1259,7 @@ export class BrainRenderer {
 				if (el.style.display !== "none") el.style.display = "none";
 				continue;
 			}
-			this.tmp.fromArray(this.layout.pos, item.i * 3).project(cam);
+			this.tmp.fromArray(this.view, item.i * 3).project(cam);
 			if (this.tmp.z > 1 || (item.cls !== "is-active" && !this.facesCamera(item.i))) {
 				el.style.display = "none";
 				continue;
