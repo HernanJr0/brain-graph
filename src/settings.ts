@@ -6,6 +6,8 @@ import type { RenderOptions } from "./renderer";
 export interface BrainGraphSettings extends RenderOptions {
 	groupBy: GroupBy;
 	showOrphans: boolean;
+	/** Versão do formato das configurações, para migrar padrões antigos. */
+	settingsVersion: number;
 }
 
 export const DEFAULT_SETTINGS: BrainGraphSettings = {
@@ -16,7 +18,8 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	glow: true,
 	hoverPulses: true,
 	ambientPulses: true,
-	ambientCount: 30,
+	ambientCount: 45,
+	settingsVersion: 2,
 	groupBy: "links",
 	showOrphans: true,
 };

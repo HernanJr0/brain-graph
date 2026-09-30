@@ -7,7 +7,14 @@ export default class BrainGraphPlugin extends Plugin {
 	settings!: BrainGraphSettings;
 
 	async onload(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const saved = (await this.loadData()) as Partial<BrainGraphSettings> | null;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+		// v2: padrão de pulsos ambientes subiu de 30 para 45 (só migra quem ainda estava no padrão antigo).
+		if (saved && (saved.settingsVersion ?? 1) < 2) {
+			if (saved.ambientCount === 30) this.settings.ambientCount = 45;
+			this.settings.settingsVersion = 2;
+			await this.saveData(this.settings);
+		}
 
 		this.registerView(VIEW_TYPE_BRAIN, (leaf) => new BrainGraphView(leaf, this));
 		this.addRibbonIcon("brain", "Abrir Brain Graph", () => void this.activateView());

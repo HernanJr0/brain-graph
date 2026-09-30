@@ -72,3 +72,17 @@ for (let i = 0; i < g2.ids.length; i++) {
 const ni = g2.ids.indexOf(extra);
 const nearest = Math.min(...targets.map((x) => dist(inc.pos, ni, g2.ids.indexOf(x))));
 console.log(`nota nova: notas antigas que se moveram ${moved}, distância até o vizinho mais próximo ${nearest.toFixed(3)} (média geral entre links ${((crossLen + intraLen) / (cross + intra)).toFixed(3)})`);
+
+// Distribuição: as notas devem cobrir os dois hemisférios e todos os lobos (sem acumular num canto).
+import { lobeAt } from "../src/brain-shape";
+const dist2 = { esquerdo: 0, direito: 0 } as Record<string, number>;
+const lobes: Record<string, number> = {};
+let cerebelo = 0;
+for (let i = 0; i < g.ids.length; i++) {
+	if (g.group[i] < 0) { cerebelo++; continue; }
+	const x = full.pos[i * 3], y = full.pos[i * 3 + 1], z = full.pos[i * 3 + 2];
+	dist2[x < 0 ? "esquerdo" : "direito"]++;
+	const l = lobeAt(x, y, z);
+	lobes[l] = (lobes[l] ?? 0) + 1;
+}
+console.log("hemisférios:", JSON.stringify(dist2), "| lobos:", JSON.stringify(lobes), "| cerebelo (órfãs):", cerebelo);
