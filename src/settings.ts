@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	ambientPulses: true,
 	ambientCount: 45,
 	idleAnimation: true,
-	surface: true,
+	surface: false,
 	dof: true,
 	idleOrbit: true,
 	settingsVersion: 2,
