@@ -55,6 +55,8 @@ export interface RenderOptions {
 	surface: boolean;
 	/** Profundidade de campo: o que está atrás do centro do cérebro fica desfocado e esmaecido. */
 	dof: boolean;
+	/** Em repouso, a câmera orbita lentamente o cérebro. */
+	idleOrbit: boolean;
 }
 
 export interface RendererCallbacks {
@@ -63,6 +65,8 @@ export interface RendererCallbacks {
 	onStats?: (stats: FrameStats) => void;
 	/** O layout terminou de se acomodar (`moved` = false se tudo veio pronto do cache). */
 	onLayoutSettled?: (moved: boolean) => void;
+	/** Entrou/saiu da "tela de descanso" (para a view esmaecer a interface). */
+	onRestChange?: (resting: boolean) => void;
 }
 
 export interface FrameStats {
@@ -151,6 +155,13 @@ const AMBIENT_FRAME_MS = 31;
 const AMBIENT_INTENSITY = 0.45;
 /** Tempo sem interação até a animação de repouso começar. */
 const IDLE_DELAY_MS = 3000;
+/** Órbita de repouso: rad/s (~90 s por volta). */
+const IDLE_ORBIT_SPEED = 0.07;
+/** Intervalo entre reações em cadeia na tela de descanso (s). */
+const BURST_MIN_S = 2.5;
+const BURST_MAX_S = 5;
+/** Gerações de uma reação em cadeia (quantas vezes os vizinhos repassam o sinal). */
+const BURST_GENERATIONS = 2;
 /** Meta: nunca abaixo de 20 fps. O governador reduz a resolução se o frame passar disso. */
 const SLOW_FRAME_MS = 50;
 
@@ -158,6 +169,7 @@ const VERT = /* glsl */ `
 attribute vec3 aColor;
 attribute float aSize;
 attribute float aHighlight;
+attribute float aFlash;
 uniform float uScale;
 uniform float uPixelRatio;
 uniform float uOrtho;
@@ -182,11 +194,11 @@ void main() {
 	vBlur = uDof * smoothstep(uDofNear, uDofFar, -mv.z);
 	float px = uOrtho > 0.5 ? aSize * uScale : aSize * uScale / max(-mv.z, 0.001);
 	// Onda de atividade (repouso): faixa estreita que varre o cérebro de trás para a frente.
-	float wave = pow(0.5 + 0.5 * sin(uTime * 0.55 - position.z * 2.2 - position.y * 0.8), 6.0) * uIdle * uWave;
-	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.25);
+	float wave = pow(0.5 + 0.5 * sin(uTime * 0.55 - position.z * 2.2 - position.y * 0.8), 4.0) * uIdle * uWave;
+	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.45 + aFlash * 0.9);
 	gl_PointSize = clamp(px, uMinSize, uMaxSize) * (1.0 + vBlur * 1.2) * uPixelRatio;
 	vDim = uFocus * (1.0 - step(0.5, aHighlight));
-	vColor = mix(mix(aColor, uBg, vDim * 0.8), vec3(1.0), wave * 0.3);
+	vColor = mix(mix(aColor, uBg, vDim * 0.8), vec3(0.75, 0.92, 1.0), clamp(wave * 0.55 + aFlash * 0.6, 0.0, 1.0));
 }`;
 
 const FRAG = /* glsl */ `
@@ -271,6 +283,7 @@ function pointGeometry(positions: Float32Array, colors: Float32Array, size: Floa
 	geo.setAttribute("aColor", new BufferAttribute(colors, 3));
 	geo.setAttribute("aSize", new BufferAttribute(size, 1));
 	geo.setAttribute("aHighlight", new BufferAttribute(new Float32Array(positions.length / 3), 1));
+	geo.setAttribute("aFlash", new BufferAttribute(new Float32Array(positions.length / 3), 1));
 	return geo;
 }
 
@@ -336,6 +349,15 @@ export class BrainRenderer {
 	private readonly ambT = new Float32Array(AMBIENT_MAX);
 	private readonly ambSpeed = new Float32Array(AMBIENT_MAX);
 	private ambCount = 0;
+	/** Pulso vivo (visível) e geração restante (0 = pulso ambiente comum; >0 = reação em cadeia). */
+	private readonly ambAlive = new Uint8Array(AMBIENT_MAX);
+	private readonly ambGen = new Uint8Array(AMBIENT_MAX);
+	private burstTimer = BURST_MIN_S;
+	private burstCursor = 0;
+	/** Brilho de cada neurônio (atributo aFlash dos nós) e o alvo que ele persegue. */
+	private flash: Float32Array = new Float32Array(0);
+	private flashTarget = new Float32Array(0);
+	private resting = false;
 	private ambLast = 0;
 	private readonly ambRng = mulberry32(11);
 	private readonly ambColor = new Color();
@@ -409,9 +431,9 @@ export class BrainRenderer {
 		this.shell.frustumCulled = false;
 		this.shell.renderOrder = 0;
 		// Intensidade da onda de repouso por camada: marcos anatômicos um pouco mais que os nós.
-		this.shellMat.uniforms.uWave.value = 1.2;
-		this.nodeMat.uniforms.uWave.value = 0.8;
-		this.haloMat.uniforms.uWave.value = 0.8;
+		this.shellMat.uniforms.uWave.value = 2.0;
+		this.nodeMat.uniforms.uWave.value = 1.0;
+		this.haloMat.uniforms.uWave.value = 1.2;
 
 		// Superfície quase opaca. Ordem de desenho: nós e links (escrevem profundidade) -> superfície
 		// (encobre 85% do que está atrás dela) -> halos e pulsos (os de trás ficam escondidos).
@@ -512,7 +534,9 @@ export class BrainRenderer {
 	setOptions(partial: Partial<RenderOptions>): void {
 		const modeChanged = partial.mode !== undefined && partial.mode !== this.opts.mode;
 		const sizeChanged = partial.nodeSize !== undefined && partial.nodeSize !== this.opts.nodeSize;
-		const ambientChanged = partial.ambientCount !== undefined && partial.ambientCount !== this.opts.ambientCount;
+		const ambientChanged =
+			(partial.ambientCount !== undefined && partial.ambientCount !== this.opts.ambientCount) ||
+			(partial.ambientPulses !== undefined && partial.ambientPulses !== this.opts.ambientPulses);
 		const surfaceChanged = partial.surface !== undefined && partial.surface !== this.opts.surface;
 		this.opts = { ...this.opts, ...partial };
 		if (modeChanged) {
@@ -541,6 +565,12 @@ export class BrainRenderer {
 	setSearch(indices: number[]): void {
 		this.search = indices;
 		this.refreshFocus();
+		this.requestFrame();
+	}
+
+	/** Interação fora do canvas (barra, busca, teclado): sai da tela de descanso. */
+	wake(): void {
+		this.markInteraction();
 		this.requestFrame();
 	}
 
@@ -688,6 +718,8 @@ export class BrainRenderer {
 		this.view = new Float32Array(n * 3);
 		this.syncView();
 		this.nodes = new Points(pointGeometry(this.view, colors, sizes), this.nodeMat);
+		this.flash = (this.nodes.geometry.getAttribute("aFlash") as BufferAttribute).array as Float32Array;
+		this.flashTarget = new Float32Array(n);
 		this.nodes.frustumCulled = false;
 		this.nodes.renderOrder = this.opts.surface && this.opts.showCortex ? 1 : 3;
 		this.scene.add(this.nodes);
@@ -920,7 +952,59 @@ export class BrainRenderer {
 		for (let p = 0; p < this.ambCount; p++) {
 			this.spawnAmbient(p);
 			this.ambT[p] = this.ambRng(); // começam espalhados, não todos juntos
+			this.ambAlive[p] = this.opts.ambientPulses ? 1 : 0;
+			this.ambGen[p] = 0;
 		}
+	}
+
+	/** Dispara um pulso de reação em cadeia a partir de `node` pela aresta `e`. */
+	private firePulse(node: number, e: number, gen: number): void {
+		if (this.ambCount === 0) return;
+		const p = this.burstCursor++ % this.ambCount;
+		const g = this.graph!;
+		this.ambEdge[p] = e;
+		this.ambDir[p] = g.edges[e * 2] === node ? 0 : 1;
+		this.ambT[p] = 0;
+		this.ambSpeed[p] = PULSE_SPEED * 1.6;
+		this.ambAlive[p] = 1;
+		this.ambGen[p] = gen;
+	}
+
+	/** Tela de descanso: de tempos em tempos uma nota bem conectada dispara para os vizinhos. */
+	private maybeBurst(dt: number): void {
+		this.burstTimer -= dt;
+		if (this.burstTimer > 0) return;
+		this.burstTimer = BURST_MIN_S + this.ambRng() * (BURST_MAX_S - BURST_MIN_S);
+		const g = this.graph;
+		if (!g || g.ids.length === 0) return;
+		let node = -1;
+		for (let tries = 0; tries < 8; tries++) {
+			const i = Math.floor(this.ambRng() * g.ids.length);
+			if (g.degree[i] >= 2 && (node < 0 || g.degree[i] > g.degree[node])) node = i;
+		}
+		if (node < 0) return;
+		this.flashTarget[node] = 1;
+		const opts = g.nodeEdges[node];
+		for (let k = 0; k < Math.min(opts.length, 5); k++) this.firePulse(node, opts[k], BURST_GENERATIONS);
+	}
+
+	/** Brilho dos neurônios: ataque rápido e suave, decaimento lento. Retorna true se algo ainda brilha. */
+	private updateFlash(dt: number): boolean {
+		if (!this.nodes || this.flash.length === 0) return false;
+		const f = this.flash;
+		const target = this.flashTarget;
+		const decay = Math.exp(-dt * 1.6);
+		const attack = Math.min(1, dt * 10);
+		let any = false;
+		for (let i = 0; i < f.length; i++) {
+			if (target[i] < 0.003 && f[i] < 0.003) continue;
+			target[i] *= decay;
+			f[i] += (target[i] - f[i]) * attack;
+			if (f[i] < 0.003 && target[i] < 0.003) f[i] = target[i] = 0;
+			any = true;
+		}
+		if (any) (this.nodes.geometry.getAttribute("aFlash") as BufferAttribute).needsUpdate = true;
+		return any;
 	}
 
 	private spawnAmbient(p: number): void {
@@ -934,35 +1018,66 @@ export class BrainRenderer {
 	/** Avança os pulsos ambientes. Retorna true se precisa de mais frames. */
 	private updateAmbient(now: number): boolean {
 		const g = this.graph;
-		const active = !!g && this.opts.ambientPulses && this.ambCount > 0;
-		this.ambient.visible = active;
-		if (!active) return false;
+		let alive = 0;
+		for (let p = 0; p < this.ambCount; p++) alive += this.ambAlive[p];
 		const dt = this.ambLast ? Math.max(0, Math.min(0.05, (now - this.ambLast) / 1000)) : 0;
 		this.ambLast = now;
+		if (g && this.idleMix > 0.6) this.maybeBurst(dt);
+		const flashing = this.updateFlash(dt);
+		const active = !!g && this.ambCount > 0 && (this.opts.ambientPulses || alive > 0);
+		this.ambient.visible = active;
+		if (!active) return flashing;
 		const geo = this.ambient.geometry;
 		const pArr = (geo.getAttribute("position") as BufferAttribute).array as Float32Array;
 		const cArr = (geo.getAttribute("aColor") as BufferAttribute).array as Float32Array;
 		const col = this.ambColor;
 		const pt = this.pt;
 		for (let p = 0; p < this.ambCount; p++) {
+			if (!this.ambAlive[p]) {
+				const o = p * PULSE_TRAIL * 3;
+				cArr.fill(0, o, o + PULSE_TRAIL * 3);
+				continue;
+			}
 			this.ambT[p] += this.ambSpeed[p] * dt;
 			if (this.ambT[p] >= 1) {
-				// Chegou: segue para outro link do neurônio de chegada (ou recomeça em outro lugar).
 				const e = this.ambEdge[p];
 				const target = g!.edges[e * 2 + (this.ambDir[p] ? 0 : 1)];
 				const options = g!.nodeEdges[target];
+				const gen = this.ambGen[p];
+				// Chegou: o neurônio cintila (forte numa reação em cadeia, de leve num pulso comum).
+				this.flashTarget[target] = Math.min(1, this.flashTarget[target] + (gen > 0 ? 0.9 : 0.3));
+				if (gen > 1) {
+					// Reação em cadeia: repassa para mais um vizinho e este pulso segue por outro (~15 pulsos por reação).
+					let fired = 0;
+					for (const next of options) {
+						if (next === e || fired >= 1) continue;
+						this.firePulse(target, next, gen - 1);
+						fired++;
+					}
+				}
+				if (gen > 0) this.ambGen[p] = gen - 1;
+				if (gen === 1 && !this.opts.ambientPulses) {
+					this.ambAlive[p] = 0; // fim da cadeia e pulsos ambientes desligados: some
+					continue;
+				}
+				// Segue para outro link do neurônio de chegada (ou recomeça em outro lugar).
 				if (options.length > 1 && this.ambRng() < 0.7) {
 					let next = options[Math.floor(this.ambRng() * options.length)];
 					if (next === e) next = options[(options.indexOf(e) + 1) % options.length];
 					this.ambEdge[p] = next;
 					this.ambDir[p] = g!.edges[next * 2] === target ? 0 : 1;
 					this.ambT[p] = 0;
-				} else this.spawnAmbient(p);
+				} else if (this.opts.ambientPulses) this.spawnAmbient(p);
+				else {
+					this.ambAlive[p] = 0;
+					continue;
+				}
 			}
 			const e = this.ambEdge[p];
 			const dir = this.ambDir[p];
 			const head = this.ambT[p];
-			col.copy(this.color(g!.group[g!.edges[e * 2 + 1 - dir]])).lerp(WHITE, 0.35);
+			col.copy(this.color(g!.group[g!.edges[e * 2 + 1 - dir]])).lerp(WHITE, this.ambGen[p] > 0 ? 0.6 : 0.35);
+			if (this.ambGen[p] > 0) col.multiplyScalar(1.5); // reação em cadeia: mais brilhante (aditivo)
 			const env = Math.sin(Math.PI * head);
 			for (let k = 0; k < PULSE_TRAIL; k++) {
 				const o = (p * PULSE_TRAIL + k) * 3;
@@ -1115,6 +1230,23 @@ export class BrainRenderer {
 		if (this.idleMix < 0.001) this.idleMix = 0;
 		if (this.idleMix > 0) this.idleTime += dt;
 		const breath = this.idleMix * 0.5 * (1 + Math.sin(this.idleTime * 0.9));
+		const nowResting = this.idleMix > 0.5;
+		if (nowResting !== this.resting) {
+			this.resting = nowResting;
+			this.callbacks.onRestChange?.(nowResting);
+		}
+		// Órbita lenta: gira em torno do eixo vertical do cérebro, com um leve sobe e desce.
+		if (this.opts.idleOrbit && this.opts.mode === "3d" && this.idleMix > 0 && dt > 0) {
+			const cam = this.camera;
+			const t = this.controls.target;
+			const a = dt * IDLE_ORBIT_SPEED * this.idleMix;
+			const ox = cam.position.x - t.x;
+			const oz = cam.position.z - t.z;
+			cam.position.x = t.x + ox * Math.cos(a) - oz * Math.sin(a);
+			cam.position.z = t.z + ox * Math.sin(a) + oz * Math.cos(a);
+			cam.position.y += Math.cos(this.idleTime * 0.2) * 0.03 * dt * this.idleMix;
+			cam.lookAt(t);
+		}
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat]) {
 			m.uniforms.uTime.value = this.idleTime;
 			m.uniforms.uIdle.value = this.idleMix;

@@ -134,3 +134,22 @@
 	color: rgba(190, 210, 255, 0.7);
 	pointer-events: none;
 }
+
+/* Tela de descanso: a interface some devagar e volta rápido. */
+.brain-graph-toolbar,
+.brain-graph-perf,
+.brain-graph-labels {
+	transition: opacity 0.25s ease;
+}
+
+.brain-graph-container.is-resting .brain-graph-toolbar,
+.brain-graph-container.is-resting .brain-graph-perf,
+.brain-graph-container.is-resting .brain-graph-labels {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 1.5s ease;
+}
+
+.brain-graph-container.is-resting canvas {
+	cursor: none;
+}

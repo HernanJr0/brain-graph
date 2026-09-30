@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	idleAnimation: true,
 	surface: true,
 	dof: true,
+	idleOrbit: true,
 	settingsVersion: 2,
 	groupBy: "links",
 	showOrphans: true,
@@ -152,11 +153,23 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Animação em repouso")
-			.setDesc("Depois de ~3 s sem mexer, uma onda de atividade lenta percorre o cérebro e o brilho respira de leve.")
+			.setName("Tela de descanso")
+			.setDesc(
+				"Depois de ~3 s sem mexer: onda de atividade, reações em cadeia entre notas, brilho respirando e a interface some. Qualquer movimento volta ao normal.",
+			)
 			.addToggle((t) =>
 				t.setValue(s.idleAnimation).onChange((v) => {
 					s.idleAnimation = v;
+					void save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Órbita na tela de descanso")
+			.setDesc("A câmera gira lentamente em volta do cérebro enquanto ele está em repouso (modo 3D).")
+			.addToggle((t) =>
+				t.setValue(s.idleOrbit).onChange((v) => {
+					s.idleOrbit = v;
 					void save();
 				}),
 			);

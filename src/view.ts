@@ -44,6 +44,7 @@ export class BrainGraphView extends ItemView {
 
 		this.renderer = new BrainRenderer(stage, { ...this.plugin.settings }, {
 			onNodeClick: (i, evt) => void this.openNode(i, evt),
+			onRestChange: (resting) => root.toggleClass("is-resting", resting),
 			onLayoutSettled: (moved) => {
 				// Salva quando algo mudou (layout novo, notas novas ou removidas).
 				if (moved || this.graph?.ids.length !== this.savedCount) this.saveLayout();
@@ -55,6 +56,12 @@ export class BrainGraphView extends ItemView {
 				);
 			},
 		});
+		// Mexer na barra, digitar ou usar o teclado também tira da tela de descanso.
+		const wake = () => this.renderer?.wake();
+		this.registerDomEvent(root, "pointermove", wake);
+		this.registerDomEvent(root, "keydown", wake);
+		this.registerDomEvent(root, "focusin", wake);
+
 		const saved = await this.plugin.loadLayout();
 		this.savedCount = saved?.size ?? 0;
 		this.rebuild(false, saved);
