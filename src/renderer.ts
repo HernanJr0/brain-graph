@@ -4,6 +4,7 @@ import {
 	BufferGeometry,
 	Color,
 	DoubleSide,
+	Fog,
 	LineBasicMaterial,
 	LineSegments,
 	Matrix4,
@@ -52,6 +53,8 @@ export interface RenderOptions {
 	 * nuvem de pontos transparente (notas dentro do córtex, links mergulhando para o centro).
 	 */
 	surface: boolean;
+	/** Profundidade de campo: o que está atrás do centro do cérebro fica desfocado e esmaecido. */
+	dof: boolean;
 }
 
 export interface RendererCallbacks {
@@ -165,28 +168,40 @@ uniform float uSizeScale;
 uniform float uTime;
 uniform float uIdle;
 uniform float uWave;
+uniform float uDof;
+uniform float uDofNear;
+uniform float uDofFar;
 uniform vec3 uBg;
 varying vec3 vColor;
 varying float vDim;
+varying float vBlur;
 void main() {
 	vec4 mv = modelViewMatrix * vec4(position, 1.0);
 	gl_Position = projectionMatrix * mv;
+	// Profundidade de campo aproximada: 0 = em foco (frente), 1 = bem desfocado (fundo do cérebro).
+	vBlur = uDof * smoothstep(uDofNear, uDofFar, -mv.z);
 	float px = uOrtho > 0.5 ? aSize * uScale : aSize * uScale / max(-mv.z, 0.001);
 	// Onda de atividade (repouso): faixa estreita que varre o cérebro de trás para a frente.
 	float wave = pow(0.5 + 0.5 * sin(uTime * 0.55 - position.z * 2.2 - position.y * 0.8), 6.0) * uIdle * uWave;
 	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.25);
-	gl_PointSize = clamp(px, uMinSize, uMaxSize) * uPixelRatio;
+	gl_PointSize = clamp(px, uMinSize, uMaxSize) * (1.0 + vBlur * 1.2) * uPixelRatio;
 	vDim = uFocus * (1.0 - step(0.5, aHighlight));
 	vColor = mix(mix(aColor, uBg, vDim * 0.8), vec3(1.0), wave * 0.3);
 }`;
 
 const FRAG = /* glsl */ `
+uniform vec3 uBg;
 varying vec3 vColor;
+varying float vBlur;
 void main() {
-	vec2 c = gl_PointCoord - 0.5;
-	float r2 = dot(c, c);
-	if (r2 > 0.25) discard;
-	gl_FragColor = vec4(r2 > 0.14 ? vColor * 0.6 : vColor, 1.0);
+	float r = length(gl_PointCoord - 0.5) * 2.0;
+	// Em foco: disco nítido com anel escuro. Desfocado: borda larga e difusa, puxando para o fundo.
+	float soft = mix(0.12, 1.0, vBlur);
+	float a = 1.0 - smoothstep(1.0 - soft, 1.0, r);
+	if (a < 0.03) discard;
+	vec3 col = (r > 0.75 && vBlur < 0.35) ? vColor * 0.6 : vColor;
+	col = mix(col, uBg, vBlur * 0.5);
+	gl_FragColor = vec4(col, a * (1.0 - vBlur * 0.65));
 }`;
 
 /** Halo: queda suave do centro para a borda, somado à cena (aditivo). Some quando o nó está fora de foco. */
@@ -195,10 +210,11 @@ uniform float uIntensity;
 uniform float uBreath;
 varying vec3 vColor;
 varying float vDim;
+varying float vBlur;
 void main() {
 	float d = length(gl_PointCoord - 0.5) * 2.0;
 	if (d > 1.0) discard;
-	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 + uBreath) * (1.0 - vDim * 0.85);
+	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 + uBreath) * (1.0 - vDim * 0.85) * (1.0 - vBlur * 0.7);
 	gl_FragColor = vec4(vColor, a);
 }`;
 
@@ -215,10 +231,14 @@ function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 			uTime: { value: 0 },
 			uIdle: { value: 0 },
 			uWave: { value: 0 },
+			uDof: { value: 0 },
+			uDofNear: { value: 3 },
+			uDofFar: { value: 4 },
 			uBg: { value: BG },
 		},
 		vertexShader: VERT,
 		fragmentShader: FRAG,
+		transparent: true,
 		depthWrite,
 	});
 }
@@ -285,6 +305,7 @@ export class BrainRenderer {
 		depthWrite: true,
 	});
 	private readonly cerebCenter = cerebellumCenter();
+	private readonly fog = new Fog(BG, 3, 4);
 	private readonly nodeMat = pointMaterial(2.5, true);
 	private readonly haloMat = haloMaterial();
 	private readonly edgeMat = new LineBasicMaterial({
@@ -638,6 +659,10 @@ export class BrainRenderer {
 		// Com superfície, marcos e links escrevem profundidade (a superfície não os cobre na frente).
 		this.shellMat.depthWrite = surface;
 		this.edgeMat.depthWrite = surface;
+		// Nuvem: nós transparentes (bordas difusas) desenhados por cima dos links.
+		this.nodeMat.depthWrite = surface;
+		if (this.nodes) this.nodes.renderOrder = surface ? 1 : 3;
+		this.scene.fog = this.opts.dof ? this.fog : null;
 		this.surfaceMat.uniforms.uOrtho.value = this.opts.mode === "2d" ? 1 : 0;
 		const ortho = this.opts.mode === "2d" ? 1 : 0;
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) m.uniforms.uOrtho.value = ortho;
@@ -664,7 +689,7 @@ export class BrainRenderer {
 		this.syncView();
 		this.nodes = new Points(pointGeometry(this.view, colors, sizes), this.nodeMat);
 		this.nodes.frustumCulled = false;
-		this.nodes.renderOrder = 1;
+		this.nodes.renderOrder = this.opts.surface && this.opts.showCortex ? 1 : 3;
 		this.scene.add(this.nodes);
 		this.halo = new Points(this.nodes.geometry, this.haloMat);
 		this.halo.frustumCulled = false;
@@ -1106,10 +1131,20 @@ export class BrainRenderer {
 			this.opts.mode === "3d"
 				? this.height / (2 * Math.tan((this.persp.fov * Math.PI) / 360))
 				: (this.height * this.ortho.zoom) / (this.ortho.top - this.ortho.bottom);
+		// Foco no centro do cérebro: o que está atrás dele vai desfocando até o fundo (~1,1 u depois).
+		const focusDist = this.camera.position.distanceTo(this.controls.target);
+		const near = focusDist - 0.15;
+		const far = focusDist + 1.1;
+		const dof = this.opts.dof ? (this.opts.surface && this.opts.showCortex ? 0.5 : 1) : 0;
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) {
 			m.uniforms.uScale.value = scale;
 			m.uniforms.uPixelRatio.value = pr;
+			m.uniforms.uDof.value = dof;
+			m.uniforms.uDofNear.value = near;
+			m.uniforms.uDofFar.value = far;
 		}
+		this.fog.near = near + 0.2;
+		this.fog.far = far + 0.9;
 	}
 
 	// ---------- Interação ----------

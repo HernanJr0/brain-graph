@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	ambientCount: 45,
 	idleAnimation: true,
 	surface: true,
+	dof: true,
 	settingsVersion: 2,
 	groupBy: "links",
 	showOrphans: true,
@@ -81,6 +82,16 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(s.surface).onChange((v) => {
 					s.surface = v;
+					void save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Profundidade de campo")
+			.setDesc("Notas e links atrás do centro do cérebro ficam desfocados e esmaecidos, destacando o que está na frente.")
+			.addToggle((t) =>
+				t.setValue(s.dof).onChange((v) => {
+					s.dof = v;
 					void save();
 				}),
 			);

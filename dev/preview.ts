@@ -27,7 +27,7 @@ for (let i = 0; i < N; i++) {
 
 const stage = document.getElementById("stage")!;
 const mode = (params.get("mode") as "3d" | "2d") ?? "3d";
-const r = new BrainRenderer(stage, { mode, showCortex: true, nodeSize: 1, hubLabels: true, glow: !params.has("noglow"), hoverPulses: true, ambientPulses: !params.has("noambient"), ambientCount: 45, idleAnimation: !params.has("noidle"), surface: !params.has("cloud") }, {
+const r = new BrainRenderer(stage, { mode, showCortex: true, nodeSize: 1, hubLabels: true, glow: !params.has("noglow"), hoverPulses: true, ambientPulses: !params.has("noambient"), ambientCount: 45, idleAnimation: !params.has("noidle"), surface: !params.has("cloud"), dof: !params.has("nodof") }, {
 	onNodeClick: (i) => console.log("click", i),
 });
 const g = buildGraphCore(paths, links, { groupBy: "links", includeOrphans: true });
