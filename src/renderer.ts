@@ -2,9 +2,11 @@ import {
 	BufferAttribute,
 	BufferGeometry,
 	Color,
+	DoubleSide,
 	LineBasicMaterial,
 	LineSegments,
 	Matrix4,
+	Mesh,
 	MOUSE,
 	OrthographicCamera,
 	PerspectiveCamera,
@@ -16,7 +18,14 @@ import {
 	WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { mulberry32, sampleShell } from "./brain-shape";
+import {
+	HEMI_CENTER,
+	anatomyMeshes,
+	cerebellumCenter,
+	cortexRadius,
+	mulberry32,
+	sampleShell,
+} from "./brain-shape";
 import type { GraphCore } from "./graph-core";
 import { BrainLayout } from "./layout";
 
@@ -60,9 +69,35 @@ const PALETTE = [
 	"#fb7185", "#38bdf8", "#c084fc", "#f59e0b", "#4ade80", "#e879f9",
 ];
 const ORPHAN_COLOR = new Color("#8391b0");
-/** Segmentos por aresta: links longos curvam para o centro (substância branca). */
-const EDGE_SEGMENTS = 4;
-const FIBER_CENTER = [0, 0.05, -0.1];
+/** Segmentos por aresta: links viram arcos por cima da superfície (a malha é opaca). */
+const EDGE_SEGMENTS = 6;
+/** Centro usado para arcos entre hemisférios (passam por cima da fissura). */
+const MIDLINE = [0, HEMI_CENTER[1], HEMI_CENTER[2]];
+
+const SURFACE_VERT = /* glsl */ `
+attribute vec3 aColor;
+uniform float uOrtho;
+varying vec3 vNormal;
+varying vec3 vView;
+varying vec3 vColor;
+void main() {
+	vec4 mv = modelViewMatrix * vec4(position, 1.0);
+	vNormal = normalize(normalMatrix * normal);
+	vView = uOrtho > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-mv.xyz);
+	vColor = aColor;
+	gl_Position = projectionMatrix * mv;
+}`;
+
+// Sombreamento de "farol" (luz vinda da câmera) + contorno suave nas bordas: dá volume sem luzes na cena.
+const SURFACE_FRAG = /* glsl */ `
+varying vec3 vNormal;
+varying vec3 vView;
+varying vec3 vColor;
+void main() {
+	float ndv = abs(dot(normalize(vNormal), normalize(vView)));
+	vec3 c = vColor * (0.45 + 0.8 * ndv) + vec3(0.2, 0.28, 0.46) * pow(1.0 - ndv, 2.5) * 0.5;
+	gl_FragColor = vec4(c, 1.0);
+}`;
 
 /** Teto de pixels do framebuffer (~1080p). Acima disso o custo de fill cresce sem ganho visível. */
 const PIXEL_BUDGET = 1.6e6;
@@ -147,6 +182,14 @@ export class BrainRenderer {
 	private readonly labelPool: HTMLDivElement[] = [];
 
 	private readonly shell: Points;
+	private readonly surfaces: Mesh[] = [];
+	private readonly surfaceMat = new ShaderMaterial({
+		uniforms: { uOrtho: { value: 0 } },
+		vertexShader: SURFACE_VERT,
+		fragmentShader: SURFACE_FRAG,
+		side: DoubleSide,
+	});
+	private readonly cerebCenter = cerebellumCenter();
 	private readonly shellMat = pointMaterial(1, false);
 	private readonly nodeMat = pointMaterial(2.5, true);
 	private readonly edgeMat = new LineBasicMaterial({
@@ -219,6 +262,19 @@ export class BrainRenderer {
 		this.shell.frustumCulled = false;
 		this.shell.renderOrder = 0;
 		this.scene.add(this.shell);
+
+		// Superfície sólida: esconde o que está do outro lado do cérebro.
+		for (const m of anatomyMeshes()) {
+			const geo = new BufferGeometry();
+			geo.setAttribute("position", new BufferAttribute(m.positions, 3));
+			geo.setAttribute("aColor", new BufferAttribute(m.colors, 3));
+			geo.setIndex(new BufferAttribute(m.indices, 1));
+			geo.computeVertexNormals();
+			const mesh = new Mesh(geo, this.surfaceMat);
+			mesh.renderOrder = -1;
+			this.surfaces.push(mesh);
+			this.scene.add(mesh);
+		}
 
 		this.setupControls();
 		this.resize();
@@ -333,8 +389,8 @@ export class BrainRenderer {
 		el.removeEventListener("pointerup", this.onPointerUp);
 		el.removeEventListener("pointerleave", this.onPointerLeave);
 		this.controls.dispose();
-		for (const obj of [this.shell, this.nodes, this.edges]) obj?.geometry.dispose();
-		for (const m of [this.shellMat, this.nodeMat, this.edgeMat]) m.dispose();
+		for (const obj of [this.shell, this.nodes, this.edges, ...this.surfaces]) obj?.geometry.dispose();
+		for (const m of [this.shellMat, this.nodeMat, this.edgeMat, this.surfaceMat]) m.dispose();
 		this.renderer.dispose();
 		this.renderer.forceContextLoss();
 		el.remove();
@@ -400,7 +456,9 @@ export class BrainRenderer {
 
 	private applyOptions(): void {
 		this.shell.visible = this.opts.showCortex;
+		for (const m of this.surfaces) m.visible = this.opts.showCortex;
 		const ortho = this.opts.mode === "2d" ? 1 : 0;
+		this.surfaceMat.uniforms.uOrtho.value = ortho;
 		this.shellMat.uniforms.uOrtho.value = ortho;
 		this.nodeMat.uniforms.uOrtho.value = ortho;
 	}
@@ -557,13 +615,42 @@ export class BrainRenderer {
 			const dz = pos[b + 2] - pos[a + 2];
 			const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
 			this.edgeLen[k] = len;
-			// Links curtos ficam retos; quanto mais longo, mais ele afunda em direção ao centro.
-			const x = Math.min(1, Math.max(0, (len - 0.3) / 0.9));
-			const bend = 0.7 * x * x * (3 - 2 * x);
-			for (let c = 0; c < 3; c++) {
-				const mid = (pos[a + c] + pos[b + c]) * 0.5;
-				ctrl[k * 3 + c] = mid + (FIBER_CENTER[c] - mid) * bend;
+			// O ponto médio da curva fica logo acima da superfície; links longos sobem mais (arco).
+			const mx = (pos[a] + pos[b]) * 0.5;
+			const my = (pos[a + 1] + pos[b + 1]) * 0.5;
+			const mz = (pos[a + 2] + pos[b + 2]) * 0.5;
+			let cx: number, cy: number, cz: number, vx: number, vy: number, vz: number, r: number;
+			if (pos[a] * pos[b] >= 0) {
+				const h = mx >= 0 ? 1 : -1;
+				cx = h * HEMI_CENTER[0];
+				cy = HEMI_CENTER[1];
+				cz = HEMI_CENTER[2];
+				vx = mx - cx;
+				vy = my - cy;
+				vz = mz - cz;
+				const vl = Math.hypot(vx, vy, vz) || 1e-6;
+				vx /= vl;
+				vy /= vl;
+				vz /= vl;
+				r = cortexRadius(h, vx, vy, vz) * 1.035 + 0.04 * len;
+			} else {
+				// Entre hemisférios: passa por cima da fissura longitudinal.
+				cx = MIDLINE[0];
+				cy = MIDLINE[1];
+				cz = MIDLINE[2];
+				vx = mx - cx;
+				vy = my - cy + 0.5;
+				vz = mz - cz;
+				const vl = Math.hypot(vx, vy, vz) || 1e-6;
+				vx /= vl;
+				vy /= vl;
+				vz /= vl;
+				r = 0.7 + 0.05 * len;
 			}
+			// Bézier quadrática: ponto no meio = (a + 2c + b) / 4 -> c = 2·alvo − médio.
+			ctrl[k * 3] = 2 * (cx + vx * r) - mx;
+			ctrl[k * 3 + 1] = 2 * (cy + vy * r) - my;
+			ctrl[k * 3 + 2] = 2 * (cz + vz * r) - mz;
 			for (let s = 0; s < EDGE_SEGMENTS; s++) {
 				this.edgePoint(k, s / EDGE_SEGMENTS, pt);
 				out[w++] = pt[0];
@@ -650,6 +737,26 @@ export class BrainRenderer {
 		if (moved < 5 && this.hover >= 0 && evt.button !== 2) this.callbacks.onNodeClick?.(this.hover, evt);
 	};
 
+	/** O nó está no lado do cérebro voltado para a câmera? (Os do outro lado ficam atrás da malha.) */
+	private facesCamera(i: number): boolean {
+		if (!this.opts.showCortex) return true;
+		const pos = this.layout!.pos;
+		const o = i * 3;
+		let cx: number, cy: number, cz: number;
+		if (this.graph!.group[i] < 0) {
+			[cx, cy, cz] = this.cerebCenter;
+		} else {
+			cx = (pos[o] >= 0 ? 1 : -1) * HEMI_CENTER[0];
+			cy = HEMI_CENTER[1];
+			cz = HEMI_CENTER[2];
+		}
+		const cam = this.camera.position;
+		return (
+			(pos[o] - cx) * (cam.x - pos[o]) + (pos[o + 1] - cy) * (cam.y - pos[o + 1]) + (pos[o + 2] - cz) * (cam.z - pos[o + 2]) >
+			0
+		);
+	}
+
 	private pick(): void {
 		this.pickDirty = false;
 		let best = -1;
@@ -666,6 +773,8 @@ export class BrainRenderer {
 				this.tmp.fromArray(pos, i * 3).applyMatrix4(this.viewProj);
 				if (this.tmp.z < -1 || this.tmp.z > 1) continue;
 				const dx = (this.tmp.x + 1) * 0.5 * w - this.mouseX;
+				if (Math.abs(dx) > 12) continue;
+				if (!this.facesCamera(i)) continue;
 				const dy = (1 - this.tmp.y) * 0.5 * h - this.mouseY;
 				const d = dx * dx + dy * dy;
 				if (d < bestD - 4 || (d <= bestD + 4 && this.tmp.z < bestZ)) {
@@ -741,7 +850,7 @@ export class BrainRenderer {
 				continue;
 			}
 			this.tmp.fromArray(this.layout.pos, item.i * 3).project(cam);
-			if (this.tmp.z > 1) {
+			if (this.tmp.z > 1 || (item.cls !== "is-active" && !this.facesCamera(item.i))) {
 				el.style.display = "none";
 				continue;
 			}

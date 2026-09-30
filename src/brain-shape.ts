@@ -23,6 +23,13 @@ const LOBE_SHAPES: Record<Lobe, Ellipsoid> = {
 	// Inclinado: a fissura lateral (Sylvius) sobe em direção à parte de trás.
 	temporal: { c: [0.5, -0.22, 0.0], r: [0.34, 0.25, 0.55], pitch: 0.22 },
 };
+const LOBE_TINT: Record<Lobe, Vec3> = {
+	frontal: [0.34, 0.44, 0.78],
+	parietal: [0.3, 0.6, 0.66],
+	occipital: [0.42, 0.58, 0.46],
+	temporal: [0.56, 0.44, 0.72],
+};
+
 /** Meia-largura da fissura longitudinal. */
 const MEDIAL_X = 0.02;
 
@@ -189,6 +196,48 @@ class RadialSurface {
 		}
 	}
 
+	/**
+	 * Malha da superfície: a própria grade (theta, phi) da tabela vira os vértices.
+	 * `mirror` espelha em x (hemisfério esquerdo a partir do direito).
+	 */
+	mesh(color: (x: number, y: number, z: number) => Vec3, mirror = false): SurfaceMesh {
+		const { nTheta, nPhi, radii, center } = this;
+		const positions = new Float32Array(nTheta * nPhi * 3);
+		const colors = new Float32Array(nTheta * nPhi * 3);
+		for (let i = 0; i < nTheta; i++) {
+			const theta = (i / (nTheta - 1)) * Math.PI;
+			const st = Math.sin(theta);
+			const dy = Math.cos(theta);
+			for (let j = 0; j < nPhi; j++) {
+				const phi = (j / nPhi) * Math.PI * 2;
+				const r = radii[i * nPhi + j];
+				const o = (i * nPhi + j) * 3;
+				const x = center[0] + st * Math.cos(phi) * r;
+				positions[o] = mirror ? -x : x;
+				positions[o + 1] = center[1] + dy * r;
+				positions[o + 2] = center[2] + st * Math.sin(phi) * r;
+				colors.set(color(positions[o], positions[o + 1], positions[o + 2]), o);
+			}
+		}
+		const indices = new Uint32Array((nTheta - 1) * nPhi * 6);
+		let w = 0;
+		for (let i = 0; i < nTheta - 1; i++) {
+			for (let j = 0; j < nPhi; j++) {
+				const a = i * nPhi + j;
+				const b = i * nPhi + ((j + 1) % nPhi);
+				const c = a + nPhi;
+				const d = b + nPhi;
+				indices[w++] = a;
+				indices[w++] = c;
+				indices[w++] = b;
+				indices[w++] = b;
+				indices[w++] = c;
+				indices[w++] = d;
+			}
+		}
+		return { positions, colors, indices };
+	}
+
 	/** Raio da superfície na direção unitária (dx,dy,dz). */
 	radius(dx: number, dy: number, dz: number): number {
 		const { nTheta, nPhi, radii } = this;
@@ -206,13 +255,41 @@ class RadialSurface {
 	}
 }
 
-let cache: { hemi: RadialSurface; cereb: RadialSurface } | undefined;
+export interface SurfaceMesh {
+	positions: Float32Array;
+	colors: Float32Array;
+	indices: Uint32Array;
+}
+
+const STEM_CENTER: Vec3 = [0, -0.66, -0.27];
+
+let cache: { hemi: RadialSurface; cereb: RadialSurface; stem: RadialSurface } | undefined;
 function surfaces() {
 	cache ??= {
 		hemi: new RadialSurface(HEMI_CENTER, sdHemisphere),
-		cereb: new RadialSurface([CEREBELLUM.x, CEREBELLUM.y, CEREBELLUM.z], sdCerebellum, 36, 72, 0.8),
+		cereb: new RadialSurface([CEREBELLUM.x, CEREBELLUM.y, CEREBELLUM.z], sdCerebellum, 40, 80, 0.8),
+		stem: new RadialSurface(STEM_CENTER, sdBrainstem, 32, 48, 0.7),
 	};
 	return cache;
+}
+
+export function cerebellumCenter(): Vec3 {
+	return surfaces().cereb.center;
+}
+
+/** Malhas sólidas da anatomia: 2 hemisférios, cerebelo e tronco. */
+export function anatomyMeshes(): SurfaceMesh[] {
+	const { hemi, cereb, stem } = surfaces();
+	const cortex = (x: number, y: number, z: number): Vec3 => {
+		const t = LOBE_TINT[lobeAt(x, y, z)];
+		return [0.035 + t[0] * 0.13, 0.04 + t[1] * 0.13, 0.06 + t[2] * 0.13];
+	};
+	return [
+		hemi.mesh(cortex, false),
+		hemi.mesh(cortex, true),
+		cereb.mesh(() => [0.085, 0.1, 0.16]),
+		stem.mesh(() => [0.075, 0.085, 0.13]),
+	];
 }
 
 /** Raio do córtex na direção unitária d a partir do centro do hemisfério h (±1). */
@@ -299,13 +376,6 @@ function gyri(x: number, y: number, z: number): number {
 	);
 }
 
-const LOBE_TINT: Record<Lobe, Vec3> = {
-	frontal: [0.34, 0.44, 0.78],
-	parietal: [0.3, 0.6, 0.66],
-	occipital: [0.42, 0.58, 0.46],
-	temporal: [0.56, 0.44, 0.72],
-};
-
 export interface Shell {
 	positions: Float32Array;
 	colors: Float32Array;
@@ -327,11 +397,11 @@ export function sampleShell(rng: Rng): Shell {
 	for (let tries = 0; got < target && tries < target * 50; tries++) {
 		const h = rng() < 0.5 ? -1 : 1;
 		randomDir(rng, d);
-		cortexPoint(h, d[0], d[1], d[2], 1, p);
-		if (Math.abs(p[0]) < MEDIAL_X + 0.03 && rng() > 0.15) continue; // face medial quase vazia
+		cortexPoint(h, d[0], d[1], d[2], 1.006, p);
+		if (Math.abs(p[0]) < MEDIAL_X + 0.06) continue; // face medial fica escondida
 		const boundary = lobeBoundary(p[0], p[1], p[2]) < 0.01 && Math.abs(p[0]) > 0.12;
 		const sulcus = Math.abs(gyri(p[0], p[1], p[2])) < 0.07;
-		if (!boundary && !sulcus && rng() > 0.02) continue;
+		if (!boundary && !sulcus) continue;
 		pts.push(p[0], p[1], p[2]);
 		if (boundary) {
 			cols.push(0.72, 0.78, 0.92);
@@ -347,7 +417,7 @@ export function sampleShell(rng: Rng): Shell {
 	const cc = cereb.center;
 	for (let tries = 0, n = 0; n < 1800 && tries < 60000; tries++) {
 		randomDir(rng, d);
-		const R = cereb.radius(d[0], d[1], d[2]);
+		const R = cereb.radius(d[0], d[1], d[2]) * 1.012;
 		const x = cc[0] + d[0] * R;
 		const y = cc[1] + d[1] * R;
 		const z = cc[2] + d[2] * R;
@@ -374,7 +444,10 @@ export function sampleShell(rng: Rng): Shell {
 			z -= (f * gz) / gl;
 		}
 		if (Math.abs(sdBrainstem(x, y, z)) > 0.01 || sdHemisphere(x, y, z) < 0) continue;
-		pts.push(x, y, z);
+		// Afasta levemente da malha na direção do centro do tronco.
+		const vx = x - STEM_CENTER[0], vy = y - STEM_CENTER[1], vz = z - STEM_CENTER[2];
+		const vl = Math.hypot(vx, vy, vz) || 1;
+		pts.push(x + (vx / vl) * 0.006, y + (vy / vl) * 0.006, z + (vz / vl) * 0.006);
 		cols.push(0.3, 0.36, 0.58);
 	}
 
