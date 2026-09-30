@@ -197,9 +197,9 @@ void main() {
 	// Onda de atividade (repouso): faixa estreita que varre o cérebro de trás para a frente.
 	float wave = pow(0.5 + 0.5 * sin(uTime * 0.55 - position.z * 2.2 - position.y * 0.8), 4.0) * uIdle * uWave;
 	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.45 + aFlash * 0.9);
-	gl_PointSize = clamp(px, uMinSize, uMaxSize) * (1.0 + vBlur * 1.6) * uPixelRatio;
+	gl_PointSize = clamp(px, uMinSize, uMaxSize) * (1.0 + vBlur * 1.0) * uPixelRatio;
 	// LOD: halos e pulsos do fundo desfocado não são desenhados (zero custo de preenchimento).
-	if (uLodCull > 0.5 && vBlur > 0.6) {
+	if (uLodCull > 0.5 && vBlur > 0.75) {
 		gl_PointSize = 0.0;
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 	}
@@ -214,13 +214,13 @@ varying float vBlur;
 void main() {
 	float r = length(gl_PointCoord - 0.5) * 2.0;
 	// Em foco: disco nítido com anel escuro. Desfocado: borda larga e difusa, puxando para o fundo.
-	// Bokeh: desfocado vira um disco maior, de opacidade baixa e uniforme, com borda suave.
+	// Bokeh: desfocado vira um disco maior e mais translúcido, de opacidade uniforme e borda suave.
 	float edge = mix(0.12, 0.3, vBlur);
 	float a = 1.0 - smoothstep(1.0 - edge, 1.0, r);
 	if (a < 0.03) discard;
 	vec3 col = (r > 0.75 && vBlur < 0.35) ? vColor * 0.6 : vColor;
-	col = mix(col, uBg, vBlur * 0.6);
-	gl_FragColor = vec4(col, a * mix(1.0, 0.32, vBlur));
+	col = mix(col, uBg, vBlur * 0.4);
+	gl_FragColor = vec4(col, a * mix(1.0, 0.55, vBlur));
 }`;
 
 /** Halo: queda suave do centro para a borda, somado à cena (aditivo). Some quando o nó está fora de foco. */
@@ -1274,9 +1274,9 @@ export class BrainRenderer {
 				: (this.height * this.ortho.zoom) / (this.ortho.top - this.ortho.bottom);
 		// Foco no centro do cérebro: o que está atrás dele vai desfocando até o fundo (~1,1 u depois).
 		const focusDist = this.camera.position.distanceTo(this.controls.target);
-		// Desfoque começa um pouco antes do centro e chega ao máximo ~0,7 u depois dele.
-		const near = focusDist - 0.35;
-		const far = focusDist + 0.7;
+		// Desfoque começa logo antes do centro e chega ao máximo ~1 u depois dele (transição gradual).
+		const near = focusDist - 0.15;
+		const far = focusDist + 1.0;
 		const dof = this.opts.dof ? (this.opts.surface && this.opts.showCortex ? 0.5 : 1) : 0;
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) {
 			m.uniforms.uScale.value = scale;
@@ -1285,8 +1285,8 @@ export class BrainRenderer {
 			m.uniforms.uDofNear.value = near;
 			m.uniforms.uDofFar.value = far;
 		}
-		this.fog.near = near + 0.1;
-		this.fog.far = far + 0.5;
+		this.fog.near = near + 0.2;
+		this.fog.far = far + 0.8;
 	}
 
 	// ---------- Interação ----------
@@ -1331,7 +1331,7 @@ export class BrainRenderer {
 		const cam = this.camera.position;
 		const o = i * 3;
 		const d = Math.hypot(this.view[o] - cam.x, this.view[o + 1] - cam.y, this.view[o + 2] - cam.z);
-		return d > cam.distanceTo(this.controls.target) + 0.45;
+		return d > cam.distanceTo(this.controls.target) + 0.6;
 	}
 
 	/** O nó está no lado do cérebro voltado para a câmera? (Os de trás ficam esmaecidos pela superfície.) */
