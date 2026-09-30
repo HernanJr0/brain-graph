@@ -18,7 +18,7 @@ import {
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { mulberry32, sampleShell } from "./brain-shape";
 import type { GraphCore } from "./graph-core";
-import { BrainLayout } from "./layout";
+import { BrainLayout, type SavedPosition } from "./layout";
 
 export type ViewMode = "3d" | "2d";
 export type ViewPreset = "lateral" | "superior" | "frontal";
@@ -34,6 +34,8 @@ export interface RendererCallbacks {
 	onNodeClick?: (index: number, evt: MouseEvent) => void;
 	/** Medidor de desempenho: chamado ~2x por segundo enquanto há frames sendo desenhados. */
 	onStats?: (stats: FrameStats) => void;
+	/** O layout terminou de se acomodar (`moved` = false se tudo veio pronto do cache). */
+	onLayoutSettled?: (moved: boolean) => void;
 }
 
 export interface FrameStats {
@@ -242,7 +244,7 @@ export class BrainRenderer {
 
 	// ---------- API pública ----------
 
-	setGraph(graph: GraphCore, prev?: Map<string, ArrayLike<number>>): void {
+	setGraph(graph: GraphCore, prev?: Map<string, SavedPosition>): void {
 		this.graph = graph;
 		this.colors = Array.from({ length: graph.groupCount + 1 }, (_, k) => groupColor(k - 1));
 		this.layout = new BrainLayout(graph, prev);
@@ -257,14 +259,18 @@ export class BrainRenderer {
 			.slice(0, 10);
 		this.refreshFocus();
 		this.requestFrame();
+		if (!this.layout.running) queueMicrotask(() => this.callbacks.onLayoutSettled?.(false));
 	}
 
-	/** Posições atuais por id, para reaproveitar o layout num rebuild. */
-	positionsById(): Map<string, Float32Array> {
-		const out = new Map<string, Float32Array>();
+	/** Posições atuais por id ([x, y, z, órfã]), para reaproveitar o layout num rebuild ou salvar. */
+	positionsById(): Map<string, number[]> {
+		const out = new Map<string, number[]>();
 		if (!this.graph || !this.layout) return out;
 		const pos = this.layout.pos;
-		this.graph.ids.forEach((id, i) => out.set(id, pos.slice(i * 3, i * 3 + 3)));
+		const group = this.graph.group;
+		this.graph.ids.forEach((id, i) =>
+			out.set(id, [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2], group[i] < 0 ? 1 : 0]),
+		);
 		return out;
 	}
 
@@ -496,6 +502,7 @@ export class BrainRenderer {
 			keepGoing = true;
 			(this.nodes!.geometry.getAttribute("position") as BufferAttribute).needsUpdate = true;
 			this.syncEdgePositions();
+			if (!this.layout.running) this.callbacks.onLayoutSettled?.(true);
 		}
 
 		if (this.pickDirty && !this.dragging) this.pick();

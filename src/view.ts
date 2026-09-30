@@ -13,6 +13,9 @@ export class BrainGraphView extends ItemView {
 	private perfEl?: HTMLElement;
 	private buttons: Record<string, HTMLElement> = {};
 	private searchIndex = new Map<string, number>();
+	/** Renomeações desde o último rebuild (caminho antigo -> novo), para a nota manter a posição. */
+	private readonly renames = new Map<string, string>();
+	private savedCount = 0;
 
 	private readonly scheduleRebuild = debounce(() => this.rebuild(false), 1500, true);
 
@@ -41,6 +44,10 @@ export class BrainGraphView extends ItemView {
 
 		this.renderer = new BrainRenderer(stage, { ...this.plugin.settings }, {
 			onNodeClick: (i, evt) => void this.openNode(i, evt),
+			onLayoutSettled: (moved) => {
+				// Salva quando algo mudou (layout novo, notas novas ou removidas).
+				if (moved || this.graph?.ids.length !== this.savedCount) this.saveLayout();
+			},
 			onStats: (st) => {
 				const ok = st.fps >= 20 ? "" : " ⚠";
 				this.perfEl?.setText(
@@ -48,16 +55,24 @@ export class BrainGraphView extends ItemView {
 				);
 			},
 		});
-		this.rebuild(true);
+		const saved = await this.plugin.loadLayout();
+		this.savedCount = saved?.size ?? 0;
+		this.rebuild(false, saved);
 
 		this.registerEvent(this.app.metadataCache.on("resolved", () => this.scheduleRebuild()));
 		this.registerEvent(this.app.vault.on("delete", () => this.scheduleRebuild()));
-		this.registerEvent(this.app.vault.on("rename", () => this.scheduleRebuild()));
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.renames.set(oldPath, file.path);
+				this.scheduleRebuild();
+			}),
+		);
 		this.registerEvent(this.app.workspace.on("file-open", () => this.syncActive()));
 	}
 
 	async onClose(): Promise<void> {
 		this.scheduleRebuild.cancel();
+		this.saveLayout.run();
 		this.renderer?.dispose();
 		this.renderer = undefined;
 	}
@@ -67,17 +82,29 @@ export class BrainGraphView extends ItemView {
 	}
 
 	/** Chamado pelo plugin quando as configurações mudam. */
-	applySettings(rebuild: boolean): void {
+	applySettings(rebuild: false | "keep" | "fresh"): void {
 		this.renderer?.setOptions({ ...this.plugin.settings });
 		this.refreshButtons();
-		if (rebuild) this.rebuild(true);
+		if (rebuild) this.rebuild(rebuild === "fresh");
 	}
 
-	rebuild(fresh: boolean): void {
+	/**
+	 * @param fresh refaz o layout do zero (ignora posições atuais e salvas).
+	 * @param saved posições vindas do layout.json (na abertura da view).
+	 */
+	rebuild(fresh: boolean, saved?: Map<string, number[]>): void {
 		if (!this.renderer) return;
 		const s = this.plugin.settings;
 		const all = this.app.vault.getMarkdownFiles();
-		const prev = fresh ? undefined : this.renderer.positionsById();
+		let prev: Map<string, number[]> | undefined;
+		if (!fresh) {
+			prev = saved ?? this.renderer.positionsById();
+			for (const [from, to] of this.renames) {
+				const p = prev.get(from);
+				if (p) prev.set(to, p);
+			}
+		}
+		this.renames.clear();
 		const graph = buildGraphCore(
 			all.map((f) => f.path),
 			this.app.metadataCache.resolvedLinks,
@@ -91,6 +118,17 @@ export class BrainGraphView extends ItemView {
 		const links = graph.edges.length / 2;
 		this.statsEl?.setText(`${graph.ids.length} notas · ${links} links · ${graph.groupCount} regiões`);
 	}
+
+	private readonly saveLayout = debounce(
+		() => {
+			if (!this.renderer) return;
+			const positions = this.renderer.positionsById();
+			this.savedCount = positions.size;
+			void this.plugin.saveLayout(positions);
+		},
+		1000,
+		true,
+	);
 
 	private syncActive(): void {
 		const file = this.app.workspace.getActiveFile();

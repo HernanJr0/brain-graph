@@ -26,7 +26,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 		const s = this.plugin.settings;
-		const save = (rebuild = false) => this.plugin.saveSettings(rebuild);
+		const save = (rebuild: false | "keep" | "fresh" = false) => this.plugin.saveSettings(rebuild);
 
 		new Setting(containerEl)
 			.setName("Modo padrão")
@@ -50,7 +50,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 					.setValue(s.groupBy)
 					.onChange((v) => {
 						s.groupBy = v as GroupBy;
-						void save(true);
+						void save("fresh");
 					}),
 			);
 
@@ -60,7 +60,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(s.showOrphans).onChange((v) => {
 					s.showOrphans = v;
-					void save(true);
+					void save("keep");
 				}),
 			);
 
@@ -96,5 +96,12 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 					void save();
 				}),
 			);
+
+		new Setting(containerEl)
+			.setName("Recalcular layout")
+			.setDesc(
+				"As posições das notas ficam salvas para o cérebro abrir sempre igual. Use isto para distribuir tudo de novo do zero.",
+			)
+			.addButton((b) => b.setButtonText("Recalcular").onClick(() => this.plugin.relayout()));
 	}
 }

@@ -3,3 +3,5 @@ main.js
 data.json
 dev/preview.js
 dev/bench.js
+dev/quality.js
+dev/affinity.js

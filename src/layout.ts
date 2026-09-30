@@ -7,6 +7,9 @@ import {
 } from "./brain-shape";
 import type { GraphCore } from "./graph-core";
 
+/** Mude quando a anatomia ou o algoritmo mudarem: invalida posições salvas. */
+export const LAYOUT_VERSION = 2;
+
 const CORTEX_INNER = 0.82;
 const CORTEX_OUTER = 0.99;
 const CEREB_INNER = 0.45;
@@ -14,20 +17,34 @@ const CEREB_OUTER = 0.95;
 const ALPHA_MIN = 0.01;
 /** Área aproximada da camada cortical visível (u²). */
 const CORTEX_AREA = 10;
+/** Acima disso, só os maiores grupos entram na simulação de sementes; os menores seguem os vizinhos. */
+const MAX_SIM_GROUPS = 400;
+/** Se menos que isso das notas tem posição salva, o layout é refeito do zero. */
+const MIN_REUSE = 0.5;
 
 /**
- * Layout em duas fases:
- * 1. "Vagas" uniformes são espalhadas pelo córtex e cada região do grafo ganha uma
- *    mancha contígua de vagas, proporcional ao seu tamanho (hubs no centro da mancha).
- * 2. Forças fazem o ajuste fino: molas nos links (fracas entre regiões), repulsão local
- *    via spatial hash e uma gravidade leve de cada nó para a sua vaga. A cada passo,
- *    tudo é projetado de volta para a camada cortical (órfãos: cerebelo).
+ * Posição salva de uma nota: [x, y, z, órfã (1) ou córtex (0)].
+ * O 4º valor evita reaproveitar a posição quando a nota mudou de estrutura.
+ */
+export type SavedPosition = ArrayLike<number>;
+
+/**
+ * Layout em três fases:
+ * 1. Sementes por afinidade: os grupos são organizados numa esfera (grupos muito ligados
+ *    ficam vizinhos) e isso é projetado no córtex.
+ * 2. "Vagas" uniformes são divididas: todos os grupos crescem juntos a partir das sementes,
+ *    cada um até a sua cota (hubs no centro da mancha).
+ * 3. Forças fazem o ajuste fino. Com posições salvas, as notas conhecidas ficam fixas e só
+ *    as novas se acomodam, nascendo perto das notas que elas citam.
  */
 export class BrainLayout {
 	readonly pos: Float32Array;
 	alpha: number;
+	/** Notas que não tinham posição salva (0 = tudo veio do cache, nada a calcular). */
+	readonly newCount: number;
 	private readonly n: number;
 	private readonly home: Float32Array;
+	private readonly fixed: Uint8Array;
 	private readonly repulse: number;
 	private readonly head: Int32Array;
 	private readonly next: Int32Array;
@@ -35,10 +52,11 @@ export class BrainLayout {
 	/** Vaults grandes esfriam mais rápido: a distribuição inicial por vagas já é boa. */
 	private readonly decay: number;
 
-	constructor(private readonly g: GraphCore, prev?: Map<string, ArrayLike<number>>) {
+	constructor(private readonly g: GraphCore, prev?: Map<string, SavedPosition>) {
 		const n = (this.n = g.ids.length);
 		this.pos = new Float32Array(n * 3);
 		this.home = new Float32Array(n * 3);
+		this.fixed = new Uint8Array(n);
 		const rng = mulberry32(42);
 
 		const members: number[][] = Array.from({ length: g.groupCount }, () => []);
@@ -48,7 +66,20 @@ export class BrainLayout {
 
 		this.repulse = Math.min(0.2, Math.max(0.025, Math.sqrt(CORTEX_AREA / Math.max(cortexCount, 1))));
 
-		this.assignCortex(members, cortexCount, rng);
+		// Posições salvas utilizáveis (mesma estrutura: órfã continua órfã, córtex continua córtex).
+		const saved: (SavedPosition | undefined)[] = g.ids.map((id, i) => {
+			const p = prev?.get(id);
+			if (!p) return undefined;
+			const wasOrphan = p.length > 3 ? p[3] === 1 : g.group[i] < 0;
+			return wasOrphan === g.group[i] < 0 ? p : undefined;
+		});
+		const reuse = n > 0 ? saved.filter(Boolean).length / n : 0;
+		const incremental = reuse >= MIN_REUSE;
+
+		// Fases 1 e 2 (também servem de fallback para notas novas sem vizinhos conhecidos).
+		// Se tudo veio salvo, não há o que calcular: o cérebro abre instantaneamente.
+		const allSaved = incremental && saved.every(Boolean);
+		if (!allSaved) this.assignCortex(members, cortexCount, rng);
 		for (const i of orphans) {
 			const o = i * 3;
 			this.home[o] = CEREBELLUM.x + (rng() * 2 - 1) * CEREBELLUM.rx;
@@ -57,22 +88,41 @@ export class BrainLayout {
 			projectToCerebellum(this.home, o, CEREB_INNER, CEREB_OUTER);
 		}
 
-		let reused = 0;
-		for (let i = 0; i < n; i++) {
-			const o = i * 3;
-			const old = prev?.get(g.ids[i]);
-			if (old) {
-				// Mantém o nó onde estava: rebuilds incrementais não "embaralham" o cérebro.
-				this.home[o] = old[0];
-				this.home[o + 1] = old[1];
-				this.home[o + 2] = old[2];
-				reused++;
+		let fresh = n;
+		if (incremental) {
+			fresh = 0;
+			for (let i = 0; i < n; i++) {
+				const p = saved[i];
+				if (!p) continue;
+				this.home.set([p[0], p[1], p[2]], i * 3);
+				this.fixed[i] = 1;
 			}
-			this.pos[o] = this.home[o];
-			this.pos[o + 1] = this.home[o + 1];
-			this.pos[o + 2] = this.home[o + 2];
+			// Notas novas nascem no centro das notas conhecidas que elas citam.
+			for (let i = 0; i < n; i++) {
+				if (this.fixed[i]) continue;
+				fresh++;
+				let sx = 0, sy = 0, sz = 0, c = 0;
+				for (const j of g.neighbors[i]) {
+					if (!this.fixed[j]) continue;
+					sx += this.home[j * 3];
+					sy += this.home[j * 3 + 1];
+					sz += this.home[j * 3 + 2];
+					c++;
+				}
+				if (c > 0 && g.group[i] >= 0) {
+					const o = i * 3;
+					this.home[o] = sx / c + (rng() - 0.5) * this.repulse;
+					this.home[o + 1] = sy / c + (rng() - 0.5) * this.repulse;
+					this.home[o + 2] = sz / c + (rng() - 0.5) * this.repulse;
+					this.pos.set(this.home.subarray(o, o + 3), o);
+					this.project(i);
+					this.home.set(this.pos.subarray(o, o + 3), o);
+				}
+			}
 		}
-		this.alpha = n > 0 && reused / n > 0.8 ? 0.2 : 1;
+		this.newCount = fresh;
+		this.pos.set(this.home);
+		this.alpha = fresh === 0 ? 0 : incremental ? 0.3 : 1;
 		this.decay = n > 5000 ? 0.965 : 0.985;
 
 		let size = 16;
@@ -94,7 +144,7 @@ export class BrainLayout {
 	}
 
 	tick(): void {
-		const { pos, home, g, n } = this;
+		const { pos, home, g, n, fixed } = this;
 		const a = this.alpha;
 		const R = this.repulse;
 
@@ -167,72 +217,180 @@ export class BrainLayout {
 					}
 		}
 
-		for (let i = 0; i < n; i++) this.project(i);
+		for (let i = 0; i < n; i++) {
+			if (fixed[i]) {
+				// Notas conhecidas não se movem: o cérebro mantém a "memória espacial".
+				pos[i * 3] = home[i * 3];
+				pos[i * 3 + 1] = home[i * 3 + 1];
+				pos[i * 3 + 2] = home[i * 3 + 2];
+			} else this.project(i);
+		}
 		this.alpha *= this.decay;
 	}
 
-	/** Distribui vagas pelo córtex e dá a cada região uma mancha contígua delas. */
+	/**
+	 * Fase 1: uma semente no córtex por grupo. Os grupos são primeiro organizados numa esfera
+	 * livre (grupos ligados se atraem, todos se repelem, sem limite de área, então ninguém fica
+	 * preso). Faz algumas tentativas e projeta a de menor tensão no córtex, preservando vizinhanças.
+	 */
+	private groupSeeds(members: number[][], rng: () => number): Float32Array {
+		const g = this.g;
+		const K = members.length;
+		const seeds = new Float32Array(K * 3);
+		if (K === 0) return seeds;
+
+		// Grafo dos grupos: peso = nº de links entre eles (normalizado pelo maior).
+		const weights = new Map<number, number>();
+		for (let e = 0; e < g.edges.length; e += 2) {
+			const a = g.group[g.edges[e]];
+			const b = g.group[g.edges[e + 1]];
+			if (a < 0 || b < 0 || a === b) continue;
+			const key = Math.min(a, b) * K + Math.max(a, b);
+			weights.set(key, (weights.get(key) ?? 0) + 1);
+		}
+		let maxW = 1;
+		for (const w of weights.values()) maxW = Math.max(maxW, w);
+		const links: [number, number, number][] = [...weights].map(([key, w]) => [Math.floor(key / K), key % K, w / maxW]);
+		const mean = members.reduce((acc, m) => acc + m.length, 0) / K;
+		const mass = members.map((m) => Math.max(0.2, m.length / mean));
+
+		// Os S maiores grupos entram na simulação; os menores seguem os vizinhos depois.
+		const S = Math.min(K, MAX_SIM_GROUPS);
+		const simLinks = links.filter(([a, b]) => a < S && b < S);
+		const restarts = S <= 60 ? 4 : S <= 200 ? 2 : 1;
+		let best: Float64Array = new Float64Array(0);
+		let bestEnergy = Infinity;
+		for (let r = 0; r < restarts; r++) {
+			const u = sphereLayout(S, simLinks, mass, rng);
+			let energy = 0;
+			for (const [a, b, w] of simLinks)
+				energy += w * Math.hypot(u[a * 3] - u[b * 3], u[a * 3 + 1] - u[b * 3 + 1], u[a * 3 + 2] - u[b * 3 + 2]);
+			if (energy < bestEnergy) {
+				bestEnergy = energy;
+				best = u;
+			}
+		}
+
+		const u = new Float64Array(K * 3);
+		u.set(best);
+		if (K > S) {
+			const acc = new Float64Array(K * 3);
+			for (const [a, b, w] of links) {
+				for (const [small, big] of [[a, b], [b, a]]) {
+					if (small < S || big >= S) continue;
+					acc[small * 3] += u[big * 3] * w;
+					acc[small * 3 + 1] += u[big * 3 + 1] * w;
+					acc[small * 3 + 2] += u[big * 3 + 2] * w;
+				}
+			}
+			const d = [0, 0, 0];
+			for (let k = S; k < K; k++) {
+				let x = acc[k * 3], y = acc[k * 3 + 1], z = acc[k * 3 + 2];
+				if (x === 0 && y === 0 && z === 0) {
+					randomUnit(rng, d);
+					[x, y, z] = d;
+				}
+				const l = Math.hypot(x, y, z) || 1;
+				u[k * 3] = x / l + (rng() - 0.5) * 0.05;
+				u[k * 3 + 1] = y / l + (rng() - 0.5) * 0.05;
+				u[k * 3 + 2] = z / l + (rng() - 0.5) * 0.05;
+			}
+		}
+
+		const out = [0, 0, 0];
+		for (let k = 0; k < K; k++) {
+			sphereToCortex(u[k * 3], u[k * 3 + 1], u[k * 3 + 2], out);
+			seeds.set(out, k * 3);
+		}
+		return seeds;
+	}
+
+	/**
+	 * Fase 2: todos os grupos crescem ao mesmo tempo a partir das sementes, cada um até a sua
+	 * cota de vagas (diagrama de potência: Voronoi com pesos ajustados iterativamente).
+	 * Assim nenhum grupo "rouba" a área dos outros e as vizinhanças da fase 1 se mantêm.
+	 */
 	private assignCortex(members: number[][], count: number, rng: () => number): void {
 		if (count === 0) return;
 		const slots = cortexSlots(count, rng);
-		const free: number[] = Array.from({ length: slots.length / 3 }, (_, s) => s);
-		const seed = [0, 0, 0];
+		const M = slots.length / 3;
 		const K = members.length;
-		const golden = Math.PI * (3 - Math.sqrt(5));
+		const seeds = this.groupSeeds(members, rng);
+		const target = members.map((m) => m.length);
+		const weight = new Float64Array(K);
+		const owner = new Int32Array(M);
+		const counts = new Int32Array(K);
+		// Área (≈ raio²) de uma nota: cada nota que falta a um grupo aumenta o peso dele nisso.
+		const nodeArea = CORTEX_AREA / (Math.PI * count);
+		const CAND = Math.min(K, 12);
+		const cand = new Int32Array(M * CAND);
+		const d2 = (s: number, k: number) =>
+			(slots[s * 3] - seeds[k * 3]) ** 2 + (slots[s * 3 + 1] - seeds[k * 3 + 1]) ** 2 + (slots[s * 3 + 2] - seeds[k * 3 + 2]) ** 2;
+		const refreshCandidates = () => {
+			const order = Array.from({ length: K }, (_, k) => k);
+			for (let s = 0; s < M; s++) {
+				order.sort((p, q) => d2(s, p) - weight[p] - (d2(s, q) - weight[q]));
+				for (let c = 0; c < CAND; c++) cand[s * CAND + c] = order[c];
+			}
+		};
 
-		for (let k = 0; k < K; k++) {
-			const list = members[k];
-			if (list.length === 0 || free.length === 0) continue;
-			// Sementes em espiral de Fibonacci, empurradas para a face lateral.
-			const y = K === 1 ? 0.2 : 0.85 - ((k + 0.5) / K) * 1.5;
-			const r = Math.sqrt(Math.max(0, 1 - y * y));
-			const h = k % 2 === 0 ? 1 : -1;
-			let dx = h * Math.max(Math.abs(Math.cos(golden * k) * r), 0.4);
-			let dy = y;
-			let dz = Math.sin(golden * k) * r;
-			const l = Math.hypot(dx, dy, dz);
-			dx /= l;
-			dy /= l;
-			dz /= l;
-			cortexPoint(h, dx, dy, dz, 0.9, seed);
-
-			const dist = (s: number) =>
-				(slots[s * 3] - seed[0]) ** 2 + (slots[s * 3 + 1] - seed[1]) ** 2 + (slots[s * 3 + 2] - seed[2]) ** 2;
-			const take = Math.min(list.length, free.length);
-			let chosen: number[];
-			if (take > 8) {
-				const scored = free.map((s) => [dist(s), s] as const).sort((p, q) => p[0] - q[0]);
-				chosen = scored.slice(0, take).map((p) => p[1]);
-				const used = new Set(chosen);
-				let w = 0;
-				for (const s of free) if (!used.has(s)) free[w++] = s;
-				free.length = w;
-			} else {
-				chosen = [];
-				for (let t = 0; t < take; t++) {
-					let best = 0;
-					let bestD = Infinity;
-					for (let f = 0; f < free.length; f++) {
-						const d = dist(free[f]);
-						if (d < bestD) {
-							bestD = d;
-							best = f;
-						}
+		const iterations = 24;
+		for (let it = 0; it < iterations; it++) {
+			if (it % 6 === 0) refreshCandidates();
+			counts.fill(0);
+			for (let s = 0; s < M; s++) {
+				let best = cand[s * CAND];
+				let bestScore = Infinity;
+				for (let c = 0; c < CAND; c++) {
+					const k = cand[s * CAND + c];
+					const score = d2(s, k) - weight[k];
+					if (score < bestScore) {
+						bestScore = score;
+						best = k;
 					}
-					chosen.push(free[best]);
-					free[best] = free[free.length - 1];
-					free.pop();
+				}
+				owner[s] = best;
+				counts[best]++;
+			}
+			if (it === iterations - 1) break;
+			for (let k = 0; k < K; k++) weight[k] += 0.4 * (target[k] - counts[k]) * nodeArea;
+			// Lloyd suave: a semente anda metade do caminho até o centro da própria mancha (regiões compactas).
+			if (it >= 3) {
+				const cx = new Float64Array(K * 3);
+				for (let s = 0; s < M; s++) {
+					const k = owner[s];
+					cx[k * 3] += slots[s * 3];
+					cx[k * 3 + 1] += slots[s * 3 + 1];
+					cx[k * 3 + 2] += slots[s * 3 + 2];
+				}
+				for (let k = 0; k < K; k++) {
+					if (!counts[k]) continue;
+					for (let c = 0; c < 3; c++) seeds[k * 3 + c] += (cx[k * 3 + c] / counts[k] - seeds[k * 3 + c]) * 0.5;
+					projectToCortex(seeds, k * 3, 0.92, 0.92);
 				}
 			}
+		}
 
-			// Hubs no centro da mancha.
+		const owned: number[][] = Array.from({ length: K }, () => []);
+		for (let s = 0; s < M; s++) owned[owner[s]].push(s);
+		for (let k = 0; k < K; k++) {
+			const list = members[k];
+			if (list.length === 0) continue;
+			const mine = owned[k].sort((p, q) => d2(p, k) - d2(q, k));
+			// Hubs no centro da mancha; se faltar vaga, as notas extras ficam perto da semente.
 			const byDegree = [...list].sort((p, q) => this.g.degree[q] - this.g.degree[p]);
 			for (let t = 0; t < byDegree.length; t++) {
-				const i = byDegree[t];
-				const s = chosen[Math.min(t, chosen.length - 1)];
-				this.home[i * 3] = slots[s * 3] + (t >= chosen.length ? (rng() - 0.5) * 0.02 : 0);
-				this.home[i * 3 + 1] = slots[s * 3 + 1];
-				this.home[i * 3 + 2] = slots[s * 3 + 2];
+				const o = byDegree[t] * 3;
+				if (t < mine.length) {
+					const s = mine[t];
+					this.home[o] = slots[s * 3];
+					this.home[o + 1] = slots[s * 3 + 1];
+					this.home[o + 2] = slots[s * 3 + 2];
+				} else {
+					this.home[o] = seeds[k * 3] + (rng() - 0.5) * this.repulse * 2;
+					this.home[o + 1] = seeds[k * 3 + 1] + (rng() - 0.5) * this.repulse * 2;
+					this.home[o + 2] = seeds[k * 3 + 2] + (rng() - 0.5) * this.repulse * 2;
+				}
 			}
 		}
 	}
@@ -247,6 +405,76 @@ export class BrainLayout {
 			projectToCortex(this.pos, o, CORTEX_INNER, CORTEX_OUTER);
 		}
 	}
+}
+
+/** Layout de forças de S grupos sobre a esfera unitária (partida aleatória, para as tentativas variarem). */
+function sphereLayout(S: number, links: [number, number, number][], mass: number[], rng: () => number): Float64Array {
+	const u = new Float64Array(S * 3);
+	const d = [0, 0, 0];
+	for (let k = 0; k < S; k++) {
+		randomUnit(rng, d);
+		u.set(d, k * 3);
+	}
+	if (S < 2) return u;
+	const f = new Float64Array(S * 3);
+	const kr = 1 / S;
+	const iterations = 300;
+	for (let it = 0; it < iterations; it++) {
+		const step = 0.15 * (1 - it / iterations) + 0.01;
+		f.fill(0);
+		for (let a = 0; a < S; a++)
+			for (let b = a + 1; b < S; b++) {
+				const dx = u[a * 3] - u[b * 3];
+				const dy = u[a * 3 + 1] - u[b * 3 + 1];
+				const dz = u[a * 3 + 2] - u[b * 3 + 2];
+				const dd = dx * dx + dy * dy + dz * dz + 1e-3;
+				const rep = (kr * mass[a] * mass[b]) / (dd * Math.sqrt(dd));
+				f[a * 3] += dx * rep;
+				f[a * 3 + 1] += dy * rep;
+				f[a * 3 + 2] += dz * rep;
+				f[b * 3] -= dx * rep;
+				f[b * 3 + 1] -= dy * rep;
+				f[b * 3 + 2] -= dz * rep;
+			}
+		for (const [a, b, w] of links) {
+			for (let c = 0; c < 3; c++) {
+				const dv = (u[b * 3 + c] - u[a * 3 + c]) * w;
+				f[a * 3 + c] += dv;
+				f[b * 3 + c] -= dv;
+			}
+		}
+		for (let k = 0; k < S; k++) {
+			const o = k * 3;
+			const fl = Math.hypot(f[o], f[o + 1], f[o + 2]);
+			const scale = (step / Math.sqrt(mass[k])) * (fl > 1 ? 1 / fl : 1);
+			const x = u[o] + f[o] * scale;
+			const y = u[o + 1] + f[o + 1] * scale;
+			const z = u[o + 2] + f[o + 2] * scale;
+			const l = Math.hypot(x, y, z) || 1;
+			u[o] = x / l;
+			u[o + 1] = y / l;
+			u[o + 2] = z / l;
+		}
+	}
+	return u;
+}
+
+/** Leva uma direção da esfera para o córtex, evitando a face medial e a base (onde não há vagas). */
+function sphereToCortex(ux: number, uy: number, uz: number, out: number[]): void {
+	const h = ux >= 0 ? 1 : -1;
+	const x = h * (0.35 + 0.65 * Math.abs(ux));
+	const y = uy >= 0 ? uy : uy * 0.55;
+	const l = Math.hypot(x, y, uz) || 1;
+	cortexPoint(h, x / l, y / l, uz / l, 0.92, out);
+}
+
+function randomUnit(rng: () => number, out: number[]): void {
+	const u = rng() * 2 - 1;
+	const phi = rng() * Math.PI * 2;
+	const s = Math.sqrt(1 - u * u);
+	out[0] = s * Math.cos(phi);
+	out[1] = u;
+	out[2] = s * Math.sin(phi);
 }
 
 /** Pontos quase uniformes na camada cortical (espiral de Fibonacci por hemisfério). */
