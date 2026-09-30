@@ -258,6 +258,75 @@ function surfaces() {
 	return cache;
 }
 
+let areaTable: { tris: Float32Array; cum: Float64Array; total: number } | undefined;
+
+/** Triângulos da face visível do córtex (sem face medial e base) com a área acumulada. */
+function cortexAreaTable() {
+	if (areaTable) return areaTable;
+	const { positions: pos, indices: idx } = surfaces().hemi.mesh(() => [0, 0, 0]);
+	const tris: number[] = [];
+	const cum: number[] = [];
+	let total = 0;
+	for (let t = 0; t < idx.length; t += 3) {
+		const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
+		const cx = (pos[a] + pos[b] + pos[c]) / 3 - HEMI_CENTER[0];
+		const cy = (pos[a + 1] + pos[b + 1] + pos[c + 1]) / 3 - HEMI_CENTER[1];
+		const cz = (pos[a + 2] + pos[b + 2] + pos[c + 2]) / 3 - HEMI_CENTER[2];
+		const l = Math.hypot(cx, cy, cz) || 1;
+		// Mesma regra das áreas escondidas: face medial e base não recebem notas.
+		if (cx / l < -0.3 || cy / l < -0.75) continue;
+		const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+		const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+		const area = 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+		if (area <= 0) continue;
+		total += area;
+		cum.push(total);
+		tris.push(pos[a], pos[a + 1], pos[a + 2], pos[b], pos[b + 1], pos[b + 2], pos[c], pos[c + 1], pos[c + 2]);
+	}
+	areaTable = { tris: new Float32Array(tris), cum: new Float64Array(cum), total };
+	return areaTable;
+}
+
+/** Área da face visível do córtex (os dois hemisférios), em u². */
+export function cortexVisibleArea(): number {
+	return cortexAreaTable().total * 2;
+}
+
+/**
+ * Pontos uniformes por ÁREA na face visível do córtex (os dois hemisférios), estratificados para
+ * não formar aglomerados. `depthMin/Max` afastam o ponto do centro do hemisfério (1 = superfície).
+ */
+export function sampleCortexByArea(count: number, rng: Rng, depthMin = 1, depthMax = 1): Float32Array {
+	const { tris, cum, total } = cortexAreaTable();
+	const out = new Float32Array(count * 3);
+	const perHemi = [Math.ceil(count / 2), Math.floor(count / 2)];
+	let w = 0;
+	for (const [hi, h] of [[0, 1], [1, -1]] as const) {
+		const N = perHemi[hi];
+		for (let i = 0; i < N; i++) {
+			const target = ((i + rng()) / N) * total;
+			let lo = 0, hi2 = cum.length - 1;
+			while (lo < hi2) {
+				const mid = (lo + hi2) >> 1;
+				if (cum[mid] < target) lo = mid + 1;
+				else hi2 = mid;
+			}
+			const t = lo * 9;
+			let r1 = rng(), r2 = rng();
+			if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+			const px = tris[t] + (tris[t + 3] - tris[t]) * r1 + (tris[t + 6] - tris[t]) * r2;
+			const py = tris[t + 1] + (tris[t + 4] - tris[t + 1]) * r1 + (tris[t + 7] - tris[t + 1]) * r2;
+			const pz = tris[t + 2] + (tris[t + 5] - tris[t + 2]) * r1 + (tris[t + 8] - tris[t + 2]) * r2;
+			const depth = depthMin + rng() * (depthMax - depthMin);
+			const x = HEMI_CENTER[0] + (px - HEMI_CENTER[0]) * depth;
+			out[w++] = h * x;
+			out[w++] = HEMI_CENTER[1] + (py - HEMI_CENTER[1]) * depth;
+			out[w++] = HEMI_CENTER[2] + (pz - HEMI_CENTER[2]) * depth;
+		}
+	}
+	return out;
+}
+
 export function cerebellumCenter(): Vec3 {
 	return surfaces().cereb.center;
 }

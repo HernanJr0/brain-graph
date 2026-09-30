@@ -4,11 +4,13 @@ import {
 	mulberry32,
 	projectToCerebellum,
 	projectToCortex,
+	cortexVisibleArea,
+	sampleCortexByArea,
 } from "./brain-shape";
 import type { GraphCore } from "./graph-core";
 
 /** Mude quando a anatomia ou o algoritmo mudarem: invalida posições salvas. */
-export const LAYOUT_VERSION = 3;
+export const LAYOUT_VERSION = 4;
 
 // Notas ficam numa película logo acima da superfície do cérebro (que é quase opaca).
 const CORTEX_INNER = 1.012;
@@ -16,12 +18,16 @@ const CORTEX_OUTER = 1.045;
 const CEREB_INNER = 1.03;
 const CEREB_OUTER = 1.09;
 const ALPHA_MIN = 0.01;
-/** Área aproximada da camada cortical visível (u²). */
-const CORTEX_AREA = 10;
 /** Acima disso, só os maiores grupos entram na simulação de sementes; os menores seguem os vizinhos. */
 const MAX_SIM_GROUPS = 400;
 /** Se menos que isso das notas tem posição salva, o layout é refeito do zero. */
 const MIN_REUSE = 0.5;
+/**
+ * Links de notas muito conectadas (índices/MOCs) puxam menos: a força de cada link é dividida pelo
+ * grau da ponta mais conectada acima deste valor. Sem isso, um índice com 100+ links comprime todo
+ * o grupo em volta dele e o cérebro fica com regiões lotadas e outras ralas.
+ */
+const HUB_DEGREE = 2;
 
 /**
  * Posição salva de uma nota: [x, y, z, órfã (1) ou córtex (0)].
@@ -52,6 +58,8 @@ export class BrainLayout {
 	private readonly mask: number;
 	/** Vaults grandes esfriam mais rápido: a distribuição inicial por vagas já é boa. */
 	private readonly decay: number;
+	/** Força de cada aresta (1 entre notas comuns, menor quando uma ponta é um índice). */
+	private readonly edgeStrength: Float32Array;
 
 	constructor(private readonly g: GraphCore, prev?: Map<string, SavedPosition>) {
 		const n = (this.n = g.ids.length);
@@ -65,7 +73,7 @@ export class BrainLayout {
 		for (let i = 0; i < n; i++) (g.group[i] < 0 ? orphans : members[g.group[i]]).push(i);
 		const cortexCount = n - orphans.length;
 
-		this.repulse = Math.min(0.2, Math.max(0.025, Math.sqrt(CORTEX_AREA / Math.max(cortexCount, 1))));
+		this.repulse = Math.min(0.4, Math.max(0.025, Math.sqrt(cortexVisibleArea() / Math.max(cortexCount, 1))));
 
 		// Posições salvas utilizáveis (mesma estrutura: órfã continua órfã, córtex continua córtex).
 		const saved: (SavedPosition | undefined)[] = g.ids.map((id, i) => {
@@ -127,6 +135,11 @@ export class BrainLayout {
 		this.pos.set(this.home);
 		this.alpha = fresh === 0 ? 0 : incremental ? 0.3 : 1;
 		this.decay = n > 5000 ? 0.965 : 0.985;
+		this.edgeStrength = new Float32Array(g.edges.length / 2);
+		for (let e = 0; e < this.edgeStrength.length; e++) {
+			const maxDeg = Math.max(g.degree[g.edges[e * 2]], g.degree[g.edges[e * 2 + 1]]);
+			this.edgeStrength[e] = Math.min(1, HUB_DEGREE / maxDeg);
+		}
 
 		let size = 16;
 		while (size < n * 2) size <<= 1;
@@ -163,7 +176,7 @@ export class BrainLayout {
 			const dz = pos[j + 2] - pos[i + 2];
 			const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
 			if (d < 1e-6) continue;
-			const k = (g.group[ia] === g.group[ib] ? 0.25 : 0.03) * a;
+			const k = (g.group[ia] === g.group[ib] ? 0.25 : 0.03) * a * this.edgeStrength[e >> 1];
 			const f = (Math.min(d - R, R * 3) / d) * k * 0.5;
 			pos[i] += dx * f;
 			pos[i + 1] += dy * f;
@@ -174,7 +187,7 @@ export class BrainLayout {
 		}
 
 		// Gravidade leve para a vaga de origem: mantém a distribuição uniforme.
-		const gk = 0.04 * a + 0.005;
+		const gk = 0.12 * a + 0.04;
 		for (let o = 0; o < n * 3; o++) pos[o] += (home[o] - pos[o]) * gk;
 
 		// Repulsão local com spatial hash (O(n) em média).
@@ -324,7 +337,7 @@ export class BrainLayout {
 		const owner = new Int32Array(M);
 		const counts = new Int32Array(K);
 		// Área (≈ raio²) de uma nota: cada nota que falta a um grupo aumenta o peso dele nisso.
-		const nodeArea = CORTEX_AREA / (Math.PI * count);
+		const nodeArea = cortexVisibleArea() / (Math.PI * count);
 		const CAND = Math.min(K, 12);
 		const cand = new Int32Array(M * CAND);
 		const d2 = (s: number, k: number) =>
@@ -371,6 +384,29 @@ export class BrainLayout {
 					for (let c = 0; c < 3; c++) seeds[k * 3 + c] += (cx[k * 3 + c] / counts[k] - seeds[k * 3 + c]) * 0.5;
 					projectToCortex(seeds, k * 3, 0.92, 0.92);
 				}
+			}
+		}
+
+		// Balanceamento exato: o diagrama converge só aproximadamente (principalmente com poucos grupos
+		// grandes). Grupos com falta pegam as vagas mais próximas de grupos com sobra, até cada nota
+		// ter a sua vaga (senão as notas sem vaga se amontoam perto da semente).
+		const have = new Int32Array(K);
+		for (let s = 0; s < M; s++) have[owner[s]]++;
+		const byNeed = Array.from({ length: K }, (_, k) => k).sort((p, q) => target[q] - have[q] - (target[p] - have[p]));
+		for (const k of byNeed) {
+			let need = target[k] - have[k];
+			if (need <= 0) break;
+			const candidates: number[] = [];
+			for (let s = 0; s < M; s++) if (have[owner[s]] > target[owner[s]]) candidates.push(s);
+			candidates.sort((p, q) => d2(p, k) - d2(q, k));
+			for (const s of candidates) {
+				if (need <= 0) break;
+				const from = owner[s];
+				if (have[from] <= target[from]) continue;
+				owner[s] = k;
+				have[from]--;
+				have[k]++;
+				need--;
 			}
 		}
 
@@ -480,29 +516,12 @@ function randomUnit(rng: () => number, out: number[]): void {
 	out[2] = s * Math.sin(phi);
 }
 
-/** Pontos quase uniformes na camada cortical (espiral de Fibonacci por hemisfério). */
+/**
+ * Vagas uniformes por área na camada cortical: exatamente uma por nota (sem vagas sobrando, que
+ * virariam frestas vazias entre as regiões).
+ */
 function cortexSlots(count: number, rng: () => number): Float32Array {
-	const out: number[] = [];
-	const p = [0, 0, 0];
-	const golden = Math.PI * (3 - Math.sqrt(5));
-	let m = Math.ceil(count * 0.75);
-	while (out.length / 3 < count) {
-		out.length = 0;
-		for (const h of [1, -1]) {
-			for (let k = 0; k < m; k++) {
-				const y = 1 - ((k + 0.5) / m) * 2;
-				const r = Math.sqrt(1 - y * y);
-				const dx = Math.cos(golden * k) * r;
-				const dz = Math.sin(golden * k) * r;
-				// Face medial e base quase não recebem nós (ficam escondidas).
-				if (dx * h < -0.3 || y < -0.75) continue;
-				cortexPoint(h, dx, y, dz, 1.015 + rng() * 0.025, p);
-				out.push(p[0], p[1], p[2]);
-			}
-		}
-		m = Math.ceil(m * 1.25);
-	}
-	return new Float32Array(out);
+	return sampleCortexByArea(count, rng, 1.015, 1.04);
 }
 
 function cell(v: number, inv: number): number {
