@@ -331,7 +331,83 @@ export function cerebellumCenter(): Vec3 {
 	return surfaces().cereb.center;
 }
 
-/** Malhas sólidas da anatomia: 2 hemisférios e cerebelo. */
+// ---------- Medula (estilizada) ----------
+// Tubo fino e afunilado ao longo de uma curva que desce e se inclina para trás. Mais grosso só no
+// topo (escondido sob o cérebro), termina num fio: sem "cabeça" arredondada nem volume na ponta.
+const SPINE_P0: Vec3 = [0, -0.24, -0.24];
+const SPINE_P1: Vec3 = [0, -0.62, -0.3];
+const SPINE_P2: Vec3 = [0, -0.98, -0.5];
+const SPINE_TOP_RADIUS = 0.07;
+const SPINE_TIP_RADIUS = 0.006;
+
+/** Centro da medula no parâmetro t (0 = topo, 1 = ponta): Bézier quadrática. */
+function spineCenter(t: number, out: number[]): void {
+	const u = 1 - t;
+	for (let c = 0; c < 3; c++) out[c] = u * u * SPINE_P0[c] + 2 * u * t * SPINE_P1[c] + t * t * SPINE_P2[c];
+}
+
+/** Raio da medula: afina rápido no início e segue fino até a ponta. */
+function spineRadius(t: number): number {
+	return SPINE_TIP_RADIUS + (SPINE_TOP_RADIUS - SPINE_TIP_RADIUS) * Math.pow(1 - t, 1.6);
+}
+
+/** Base ortonormal perpendicular à curva em t (para varrer o círculo do tubo). */
+function spineFrame(t: number, c: number[], n: number[], b: number[]): void {
+	const a = [0, 0, 0];
+	const z = [0, 0, 0];
+	spineCenter(Math.max(0, t - 0.01), a);
+	spineCenter(Math.min(1, t + 0.01), z);
+	spineCenter(t, c);
+	let tx = z[0] - a[0], ty = z[1] - a[1], tz = z[2] - a[2];
+	const tl = Math.hypot(tx, ty, tz) || 1;
+	tx /= tl; ty /= tl; tz /= tl;
+	// n = x (a curva vive no plano sagital), b = tangente × n
+	n[0] = 1; n[1] = 0; n[2] = 0;
+	b[0] = ty * n[2] - tz * n[1];
+	b[1] = tz * n[0] - tx * n[2];
+	b[2] = tx * n[1] - ty * n[0];
+	const bl = Math.hypot(b[0], b[1], b[2]) || 1;
+	b[0] /= bl; b[1] /= bl; b[2] /= bl;
+}
+
+function spineMesh(color: Vec3): SurfaceMesh {
+	const RINGS = 28;
+	const SIDES = 14;
+	const positions = new Float32Array(RINGS * SIDES * 3);
+	const colors = new Float32Array(RINGS * SIDES * 3);
+	const c = [0, 0, 0], n = [0, 0, 0], b = [0, 0, 0];
+	for (let i = 0; i < RINGS; i++) {
+		const t = i / (RINGS - 1);
+		spineFrame(t, c, n, b);
+		const r = spineRadius(t);
+		for (let j = 0; j < SIDES; j++) {
+			const a = (j / SIDES) * Math.PI * 2;
+			const o = (i * SIDES + j) * 3;
+			for (let k = 0; k < 3; k++) positions[o + k] = c[k] + (n[k] * Math.cos(a) + b[k] * Math.sin(a)) * r;
+			// escurece em direção à ponta: a medula "some" no fundo
+			const fade = 1 - t * 0.6;
+			colors[o] = color[0] * fade;
+			colors[o + 1] = color[1] * fade;
+			colors[o + 2] = color[2] * fade;
+		}
+	}
+	const indices = new Uint32Array((RINGS - 1) * SIDES * 6);
+	let w = 0;
+	for (let i = 0; i < RINGS - 1; i++)
+		for (let j = 0; j < SIDES; j++) {
+			const p = i * SIDES + j;
+			const q = i * SIDES + ((j + 1) % SIDES);
+			indices[w++] = p;
+			indices[w++] = p + SIDES;
+			indices[w++] = q;
+			indices[w++] = q;
+			indices[w++] = p + SIDES;
+			indices[w++] = q + SIDES;
+		}
+	return { positions, colors, indices };
+}
+
+/** Malhas sólidas da anatomia: 2 hemisférios, cerebelo e medula. */
 export function anatomyMeshes(): SurfaceMesh[] {
 	const { hemi, cereb } = surfaces();
 	const cortex = (x: number, y: number, z: number): Vec3 => {
@@ -342,6 +418,7 @@ export function anatomyMeshes(): SurfaceMesh[] {
 		hemi.mesh(cortex, false),
 		hemi.mesh(cortex, true),
 		cereb.mesh(() => [0.085, 0.1, 0.16]),
+		spineMesh([0.075, 0.088, 0.14]),
 	];
 }
 
@@ -436,7 +513,7 @@ export interface Shell {
 
 /**
  * Pontos da anatomia: fissuras e sulcos principais (fronteiras entre lobos) em destaque,
- * sulcos secundários discretos levemente tingidos por lobo e cerebelo com folhas.
+ * sulcos secundários discretos levemente tingidos por lobo, cerebelo com folhas e medula.
  */
 export function sampleShell(rng: Rng): Shell {
 	const { hemi, cereb } = surfaces();
@@ -478,6 +555,23 @@ export function sampleShell(rng: Rng): Shell {
 		pts.push(x, y, z);
 		cols.push(0.36, 0.42, 0.68);
 		n++;
+	}
+
+	// Medula: pontos na superfície do tubo, cada vez mais esparsos até se dissolverem na ponta.
+	const sc = [0, 0, 0], sn = [0, 0, 0], sb = [0, 0, 0];
+	for (let k = 0; k < 900; k++) {
+		const t = rng();
+		if (rng() > Math.pow(1 - t, 1.3)) continue;
+		spineFrame(t, sc, sn, sb);
+		const a = rng() * Math.PI * 2;
+		const r = spineRadius(t) * 1.02;
+		const x = sc[0] + (sn[0] * Math.cos(a) + sb[0] * Math.sin(a)) * r;
+		const y = sc[1] + (sn[1] * Math.cos(a) + sb[1] * Math.sin(a)) * r;
+		const z = sc[2] + (sn[2] * Math.cos(a) + sb[2] * Math.sin(a)) * r;
+		if (sdHemisphere(x, y, z) < 0 || sdCerebellum(x, y, z) < 0) continue; // parte escondida no cérebro
+		pts.push(x, y, z);
+		const f = 1 - t * 0.5;
+		cols.push(0.3 * f, 0.36 * f, 0.6 * f);
 	}
 
 	return { positions: new Float32Array(pts), colors: new Float32Array(cols) };
