@@ -154,7 +154,7 @@ const AMBIENT_FRAME_MS = 31;
 /** Intensidade dos pulsos ambientes (mais discretos que os do hover). */
 const AMBIENT_INTENSITY = 0.45;
 /** Tempo sem interação até a animação de repouso começar. */
-const IDLE_DELAY_MS = 3000;
+const IDLE_DELAY_MS = 1500;
 /** Órbita de repouso: rad/s (~90 s por volta). */
 const IDLE_ORBIT_SPEED = 0.07;
 /** Intervalo entre reações em cadeia na tela de descanso (s). */
@@ -1229,13 +1229,13 @@ export class BrainRenderer {
 		attr.needsUpdate = true;
 	}
 
-	/** Entra devagar após ~3 s sem interação e sai rápido ao mexer. Retorna true se precisa de mais frames. */
+	/** Entra suave após ~1,5 s sem interação e sai rápido ao mexer. Retorna true se precisa de mais frames. */
 	private updateIdle(now: number): boolean {
 		const dt = this.idleLast ? Math.max(0, Math.min(0.05, (now - this.idleLast) / 1000)) : 0;
 		this.idleLast = now;
 		const resting = !this.dragging && this.hover < 0 && performance.now() - this.lastInteraction > IDLE_DELAY_MS;
 		const target = this.opts.idleAnimation && resting ? 1 : 0;
-		this.idleMix += (target - this.idleMix) * Math.min(1, dt * (target ? 0.5 : 6));
+		this.idleMix += (target - this.idleMix) * Math.min(1, dt * (target ? 0.85 : 6));
 		if (this.idleMix < 0.001) this.idleMix = 0;
 		if (this.idleMix > 0) this.idleTime += dt;
 		const breath = this.idleMix * 0.5 * (1 + Math.sin(this.idleTime * 0.9));

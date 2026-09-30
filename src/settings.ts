@@ -155,7 +155,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Tela de descanso")
 			.setDesc(
-				"Depois de ~3 s sem mexer: onda de atividade, reações em cadeia entre notas, brilho respirando e a interface some. Qualquer movimento volta ao normal.",
+				"Depois de ~1,5 s sem mexer: onda de atividade, reações em cadeia entre notas, brilho respirando e a interface some. Qualquer movimento volta ao normal.",
 			)
 			.addToggle((t) =>
 				t.setValue(s.idleAnimation).onChange((v) => {
