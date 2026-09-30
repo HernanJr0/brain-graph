@@ -160,7 +160,7 @@ export class BrainGraphView extends ItemView {
 			b.onclick = () => this.renderer?.applyPreset(key);
 		}
 
-		const toggle = (key: "showCortex", icon: string, label: string) => {
+		const toggle = (key: "showCortex" | "glow", icon: string, label: string) => {
 			const b = bar.createEl("button", { cls: "brain-graph-btn", attr: { "aria-label": label } });
 			setIcon(b, icon);
 			b.onclick = () => {
@@ -170,6 +170,7 @@ export class BrainGraphView extends ItemView {
 			this.buttons[key] = b;
 		};
 		toggle("showCortex", "brain", "Mostrar córtex");
+		toggle("glow", "sparkles", "Brilho dos nós");
 
 		const search = bar.createEl("input", {
 			cls: "brain-graph-search",
@@ -198,5 +199,6 @@ export class BrainGraphView extends ItemView {
 		this.buttons.mode?.setText(s.mode === "3d" ? "3D" : "2D");
 		this.buttons.mode?.setAttr("aria-label", s.mode === "3d" ? "Mudar para 2D" : "Mudar para 3D");
 		this.buttons.showCortex?.toggleClass("is-active", s.showCortex);
+		this.buttons.glow?.toggleClass("is-active", s.glow);
 	}
 }

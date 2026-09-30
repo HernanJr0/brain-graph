@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	showCortex: true,
 	nodeSize: 1,
 	hubLabels: true,
+	glow: true,
 	groupBy: "links",
 	showOrphans: true,
 };
@@ -70,6 +71,16 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(s.showCortex).onChange((v) => {
 					s.showCortex = v;
+					void save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Brilho dos nós")
+			.setDesc("Halo suave em volta de cada nota. Custo mínimo: só é desenhado quando a tela muda.")
+			.addToggle((t) =>
+				t.setValue(s.glow).onChange((v) => {
+					s.glow = v;
 					void save();
 				}),
 			);

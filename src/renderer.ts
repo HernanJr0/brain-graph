@@ -1,4 +1,5 @@
 import {
+	AdditiveBlending,
 	BufferAttribute,
 	BufferGeometry,
 	Color,
@@ -28,6 +29,8 @@ export interface RenderOptions {
 	showCortex: boolean;
 	nodeSize: number;
 	hubLabels: boolean;
+	/** Halo suave em volta dos nós. */
+	glow: boolean;
 }
 
 export interface RendererCallbacks {
@@ -69,6 +72,8 @@ const FIBER_CENTER = [0, 0.05, -0.1];
 /** Teto de pixels do framebuffer (~1080p). Acima disso o custo de fill cresce sem ganho visível. */
 const PIXEL_BUDGET = 1.6e6;
 const MAX_POINT_PX = 28;
+/** Teto do halo em px: limita o custo de preenchimento com zoom. */
+const MAX_HALO_PX = 60;
 /** Meta: nunca abaixo de 20 fps. O governador reduz a resolução se o frame passar disso. */
 const SLOW_FRAME_MS = 50;
 
@@ -82,16 +87,18 @@ uniform float uOrtho;
 uniform float uFocus;
 uniform float uMinSize;
 uniform float uMaxSize;
+uniform float uSizeScale;
 uniform vec3 uBg;
 varying vec3 vColor;
+varying float vDim;
 void main() {
 	vec4 mv = modelViewMatrix * vec4(position, 1.0);
 	gl_Position = projectionMatrix * mv;
 	float px = uOrtho > 0.5 ? aSize * uScale : aSize * uScale / max(-mv.z, 0.001);
-	px *= 1.0 + aHighlight * 0.5;
+	px *= (1.0 + aHighlight * 0.5) * uSizeScale;
 	gl_PointSize = clamp(px, uMinSize, uMaxSize) * uPixelRatio;
-	float dim = uFocus * (1.0 - step(0.5, aHighlight));
-	vColor = mix(aColor, uBg, dim * 0.8);
+	vDim = uFocus * (1.0 - step(0.5, aHighlight));
+	vColor = mix(aColor, uBg, vDim * 0.8);
 }`;
 
 const FRAG = /* glsl */ `
@@ -103,6 +110,18 @@ void main() {
 	gl_FragColor = vec4(r2 > 0.14 ? vColor * 0.6 : vColor, 1.0);
 }`;
 
+/** Halo: queda suave do centro para a borda, somado à cena (aditivo). Some quando o nó está fora de foco. */
+const HALO_FRAG = /* glsl */ `
+uniform float uIntensity;
+varying vec3 vColor;
+varying float vDim;
+void main() {
+	float d = length(gl_PointCoord - 0.5) * 2.0;
+	if (d > 1.0) discard;
+	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 - vDim * 0.85);
+	gl_FragColor = vec4(vColor, a);
+}`;
+
 function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 	return new ShaderMaterial({
 		uniforms: {
@@ -112,12 +131,24 @@ function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 			uFocus: { value: 0 },
 			uMinSize: { value: minSize },
 			uMaxSize: { value: MAX_POINT_PX },
+			uSizeScale: { value: 1 },
 			uBg: { value: BG },
 		},
 		vertexShader: VERT,
 		fragmentShader: FRAG,
 		depthWrite,
 	});
+}
+
+function haloMaterial(): ShaderMaterial {
+	const m = pointMaterial(7, false);
+	m.fragmentShader = HALO_FRAG;
+	m.uniforms.uSizeScale.value = 2.8;
+	m.uniforms.uMaxSize.value = MAX_HALO_PX;
+	m.uniforms.uIntensity = { value: 0.42 };
+	m.transparent = true;
+	m.blending = AdditiveBlending;
+	return m;
 }
 
 function pointGeometry(positions: Float32Array, colors: Float32Array, size: Float32Array): BufferGeometry {
@@ -151,6 +182,7 @@ export class BrainRenderer {
 	private readonly shell: Points;
 	private readonly shellMat = pointMaterial(1, false);
 	private readonly nodeMat = pointMaterial(2.5, true);
+	private readonly haloMat = haloMaterial();
 	private readonly edgeMat = new LineBasicMaterial({
 		vertexColors: true,
 		transparent: true,
@@ -161,6 +193,8 @@ export class BrainRenderer {
 	private graph?: GraphCore;
 	private layout?: BrainLayout;
 	private nodes?: Points;
+	/** Compartilha a geometria dos nós; só muda o material. */
+	private halo?: Points;
 	private edges?: LineSegments;
 	private colors: Color[] = [];
 	private edgeBase = new Float32Array(0);
@@ -340,7 +374,7 @@ export class BrainRenderer {
 		el.removeEventListener("pointerleave", this.onPointerLeave);
 		this.controls.dispose();
 		for (const obj of [this.shell, this.nodes, this.edges]) obj?.geometry.dispose();
-		for (const m of [this.shellMat, this.nodeMat, this.edgeMat]) m.dispose();
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.edgeMat]) m.dispose();
 		this.renderer.dispose();
 		this.renderer.forceContextLoss();
 		el.remove();
@@ -407,8 +441,8 @@ export class BrainRenderer {
 	private applyOptions(): void {
 		this.shell.visible = this.opts.showCortex;
 		const ortho = this.opts.mode === "2d" ? 1 : 0;
-		this.shellMat.uniforms.uOrtho.value = ortho;
-		this.nodeMat.uniforms.uOrtho.value = ortho;
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat]) m.uniforms.uOrtho.value = ortho;
+		if (this.halo) this.halo.visible = this.opts.glow;
 	}
 
 	private buildNodes(): void {
@@ -417,6 +451,7 @@ export class BrainRenderer {
 		if (!g || !layout) return;
 		if (this.nodes) {
 			this.scene.remove(this.nodes);
+			if (this.halo) this.scene.remove(this.halo);
 			this.nodes.geometry.dispose();
 		}
 		const n = g.ids.length;
@@ -430,6 +465,11 @@ export class BrainRenderer {
 		this.nodes.frustumCulled = false;
 		this.nodes.renderOrder = 1;
 		this.scene.add(this.nodes);
+		this.halo = new Points(this.nodes.geometry, this.haloMat);
+		this.halo.frustumCulled = false;
+		this.halo.renderOrder = 3;
+		this.halo.visible = this.opts.glow;
+		this.scene.add(this.halo);
 	}
 
 	private buildEdges(): void {
@@ -624,7 +664,7 @@ export class BrainRenderer {
 			this.opts.mode === "3d"
 				? this.height / (2 * Math.tan((this.persp.fov * Math.PI) / 360))
 				: (this.height * this.ortho.zoom) / (this.ortho.top - this.ortho.bottom);
-		for (const m of [this.shellMat, this.nodeMat]) {
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat]) {
 			m.uniforms.uScale.value = scale;
 			m.uniforms.uPixelRatio.value = pr;
 		}
@@ -717,6 +757,7 @@ export class BrainRenderer {
 		}
 		(this.nodes.geometry.getAttribute("aHighlight") as BufferAttribute).needsUpdate = true;
 		this.nodeMat.uniforms.uFocus.value = focus;
+		this.haloMat.uniforms.uFocus.value = focus;
 		this.labelSet = labels;
 
 		const e = g.edges;
