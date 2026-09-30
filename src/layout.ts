@@ -7,11 +7,10 @@ import {
 } from "./brain-shape";
 import type { GraphCore } from "./graph-core";
 
-// Nós ficam numa película logo acima da superfície (a malha do cérebro é opaca).
-const CORTEX_INNER = 1.012;
-const CORTEX_OUTER = 1.045;
-const CEREB_INNER = 1.03;
-const CEREB_OUTER = 1.09;
+const CORTEX_INNER = 0.82;
+const CORTEX_OUTER = 0.99;
+const CEREB_INNER = 0.45;
+const CEREB_OUTER = 0.95;
 const ALPHA_MIN = 0.01;
 /** Área aproximada da camada cortical visível (u²). */
 const CORTEX_AREA = 10;
@@ -266,7 +265,7 @@ function cortexSlots(count: number, rng: () => number): Float32Array {
 				const dz = Math.sin(golden * k) * r;
 				// Face medial e base quase não recebem nós (ficam escondidas).
 				if (dx * h < -0.3 || y < -0.75) continue;
-				cortexPoint(h, dx, y, dz, 1.015 + rng() * 0.025, p);
+				cortexPoint(h, dx, y, dz, 0.86 + rng() * 0.12, p);
 				out.push(p[0], p[1], p[2]);
 			}
 		}
