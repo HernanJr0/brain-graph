@@ -79,14 +79,14 @@ export interface FrameStats {
 	bufferHeight: number;
 }
 
-const TARGET = new Vector3(0, -0.14, 0);
+const TARGET = new Vector3(0, 0.02, 0);
 const PRESETS: Record<ViewPreset, [number, number, number]> = {
 	lateral: [1, 0.08, 0.02],
 	superior: [0, 1, -0.01],
 	frontal: [0.02, 0.08, 1],
 };
-const CAMERA_DISTANCE = 3.6;
-const ORTHO_HALF_HEIGHT = 1.2;
+const CAMERA_DISTANCE = 3.35;
+const ORTHO_HALF_HEIGHT = 1.08;
 const BG = new Color("#070a12");
 const PALETTE = [
 	"#5eead4", "#a78bfa", "#f472b6", "#60a5fa", "#fbbf24", "#34d399",

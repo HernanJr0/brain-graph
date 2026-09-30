@@ -33,16 +33,15 @@ const LOBE_TINT: Record<Lobe, Vec3> = {
 /** Meia-largura da fissura longitudinal. */
 const MEDIAL_X = 0.02;
 
-const CEREB_LEFT: Ellipsoid = { c: [-0.24, -0.56, -0.6], r: [0.3, 0.22, 0.3] };
-const CEREB_RIGHT: Ellipsoid = { c: [0.24, -0.56, -0.6], r: [0.3, 0.22, 0.3] };
-const VERMIS: Ellipsoid = { c: [0, -0.54, -0.64], r: [0.12, 0.2, 0.26] };
-const PONS: Ellipsoid = { c: [0, -0.46, -0.2], r: [0.17, 0.17, 0.15] };
-const MEDULLA_TOP: Vec3 = [0, -0.55, -0.25];
-const MEDULLA_BOTTOM: Vec3 = [0, -1.0, -0.34];
+// Parte inferior estilizada (liberdade artística): sem tronco encefálico, e o cerebelo vira uma
+// "concha" larga e achatada encaixada sob o lobo occipital, com os dois lados bem fundidos.
+const CEREB_LEFT: Ellipsoid = { c: [-0.26, -0.43, -0.66], r: [0.34, 0.15, 0.27] };
+const CEREB_RIGHT: Ellipsoid = { c: [0.26, -0.43, -0.66], r: [0.34, 0.15, 0.27] };
+const VERMIS: Ellipsoid = { c: [0, -0.44, -0.7], r: [0.14, 0.15, 0.24] };
 
 export const HEMI_CENTER: Vec3 = [0.42, 0.06, -0.08];
 /** Bounding aproximado do cerebelo (para sortear posições iniciais dos órfãos). */
-export const CEREBELLUM = { x: 0, y: -0.56, z: -0.6, rx: 0.52, ry: 0.22, rz: 0.3 };
+export const CEREBELLUM = { x: 0, y: -0.43, z: -0.66, rx: 0.58, ry: 0.15, rz: 0.27 };
 
 // ---------- SDF ----------
 
@@ -61,13 +60,6 @@ function sdEllipsoid(x: number, y: number, z: number, e: Ellipsoid): number {
 	const k0 = Math.sqrt((px / a) ** 2 + (py / b) ** 2 + (pz / d) ** 2);
 	const k1 = Math.sqrt((px / (a * a)) ** 2 + (py / (b * b)) ** 2 + (pz / (d * d)) ** 2);
 	return k1 === 0 ? -Math.min(a, b, d) : (k0 * (k0 - 1)) / k1;
-}
-
-function sdCapsule(x: number, y: number, z: number, a: Vec3, b: Vec3, r: number): number {
-	const pax = x - a[0], pay = y - a[1], paz = z - a[2];
-	const bax = b[0] - a[0], bay = b[1] - a[1], baz = b[2] - a[2];
-	const h = Math.max(0, Math.min(1, (pax * bax + pay * bay + paz * baz) / (bax * bax + bay * bay + baz * baz)));
-	return Math.hypot(pax - bax * h, pay - bay * h, paz - baz * h) - r;
 }
 
 function smin(a: number, b: number, k: number): number {
@@ -128,11 +120,7 @@ function parietoOccipitalDist(y: number, z: number): number {
 export function sdCerebellum(x: number, y: number, z: number): number {
 	const l = sdEllipsoid(x, y, z, CEREB_LEFT);
 	const r = sdEllipsoid(x, y, z, CEREB_RIGHT);
-	return smin(smin(l, r, 0.08), sdEllipsoid(x, y, z, VERMIS), 0.06);
-}
-
-export function sdBrainstem(x: number, y: number, z: number): number {
-	return smin(sdEllipsoid(x, y, z, PONS), sdCapsule(x, y, z, MEDULLA_TOP, MEDULLA_BOTTOM, 0.1), 0.08);
+	return smin(smin(l, r, 0.14), sdEllipsoid(x, y, z, VERMIS), 0.1);
 }
 
 /** Lobo de um ponto, pelos marcos anatômicos (sulco central, Sylvius, parieto-occipital). */
@@ -261,14 +249,11 @@ export interface SurfaceMesh {
 	indices: Uint32Array;
 }
 
-const STEM_CENTER: Vec3 = [0, -0.66, -0.27];
-
-let cache: { hemi: RadialSurface; cereb: RadialSurface; stem: RadialSurface } | undefined;
+let cache: { hemi: RadialSurface; cereb: RadialSurface } | undefined;
 function surfaces() {
 	cache ??= {
 		hemi: new RadialSurface(HEMI_CENTER, sdHemisphere),
 		cereb: new RadialSurface([CEREBELLUM.x, CEREBELLUM.y, CEREBELLUM.z], sdCerebellum, 40, 80, 0.8),
-		stem: new RadialSurface(STEM_CENTER, sdBrainstem, 32, 48, 0.7),
 	};
 	return cache;
 }
@@ -277,9 +262,9 @@ export function cerebellumCenter(): Vec3 {
 	return surfaces().cereb.center;
 }
 
-/** Malhas sólidas da anatomia: 2 hemisférios, cerebelo e tronco. */
+/** Malhas sólidas da anatomia: 2 hemisférios e cerebelo. */
 export function anatomyMeshes(): SurfaceMesh[] {
-	const { hemi, cereb, stem } = surfaces();
+	const { hemi, cereb } = surfaces();
 	const cortex = (x: number, y: number, z: number): Vec3 => {
 		const t = LOBE_TINT[lobeAt(x, y, z)];
 		return [0.035 + t[0] * 0.13, 0.04 + t[1] * 0.13, 0.06 + t[2] * 0.13];
@@ -288,7 +273,6 @@ export function anatomyMeshes(): SurfaceMesh[] {
 		hemi.mesh(cortex, false),
 		hemi.mesh(cortex, true),
 		cereb.mesh(() => [0.085, 0.1, 0.16]),
-		stem.mesh(() => [0.075, 0.085, 0.13]),
 	];
 }
 
@@ -383,7 +367,7 @@ export interface Shell {
 
 /**
  * Pontos da anatomia: fissuras e sulcos principais (fronteiras entre lobos) em destaque,
- * sulcos secundários discretos levemente tingidos por lobo, cerebelo com folhas e tronco.
+ * sulcos secundários discretos levemente tingidos por lobo e cerebelo com folhas.
  */
 export function sampleShell(rng: Rng): Shell {
 	const { hemi, cereb } = surfaces();
@@ -421,34 +405,10 @@ export function sampleShell(rng: Rng): Shell {
 		const x = cc[0] + d[0] * R;
 		const y = cc[1] + d[1] * R;
 		const z = cc[2] + d[2] * R;
-		if (Math.abs(Math.sin(y * 75 + 2.5 * Math.sin(x * 3.5))) > 0.28) continue;
+		if (Math.abs(Math.sin(y * 95 + 2.5 * Math.sin(x * 3.5))) > 0.3) continue;
 		pts.push(x, y, z);
 		cols.push(0.36, 0.42, 0.68);
 		n++;
-	}
-
-	// Tronco encefálico: pontos sobre a superfície (projeção por gradiente).
-	for (let n = 0; n < 500; n++) {
-		let x = (rng() - 0.5) * 0.4;
-		let y = -0.35 - rng() * 0.68;
-		let z = -0.2 - rng() * 0.2 + (rng() - 0.5) * 0.2;
-		for (let k = 0; k < 6; k++) {
-			const e = 1e-3;
-			const f = sdBrainstem(x, y, z);
-			const gx = (sdBrainstem(x + e, y, z) - f) / e;
-			const gy = (sdBrainstem(x, y + e, z) - f) / e;
-			const gz = (sdBrainstem(x, y, z + e) - f) / e;
-			const gl = Math.hypot(gx, gy, gz) || 1;
-			x -= (f * gx) / gl;
-			y -= (f * gy) / gl;
-			z -= (f * gz) / gl;
-		}
-		if (Math.abs(sdBrainstem(x, y, z)) > 0.01 || sdHemisphere(x, y, z) < 0) continue;
-		// Afasta levemente da malha na direção do centro do tronco.
-		const vx = x - STEM_CENTER[0], vy = y - STEM_CENTER[1], vz = z - STEM_CENTER[2];
-		const vl = Math.hypot(vx, vy, vz) || 1;
-		pts.push(x + (vx / vl) * 0.006, y + (vy / vl) * 0.006, z + (vz / vl) * 0.006);
-		cols.push(0.3, 0.36, 0.58);
 	}
 
 	return { positions: new Float32Array(pts), colors: new Float32Array(cols) };

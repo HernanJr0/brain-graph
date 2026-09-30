@@ -96,6 +96,8 @@ export class BrainLayout {
 				const p = saved[i];
 				if (!p) continue;
 				this.home.set([p[0], p[1], p[2]], i * 3);
+				// O cerebelo pode ter mudado de forma: órfãs salvas são reprojetadas na superfície atual.
+				if (g.group[i] < 0) projectToCerebellum(this.home, i * 3, CEREB_INNER, CEREB_OUTER);
 				this.fixed[i] = 1;
 			}
 			// Notas novas nascem no centro das notas conhecidas que elas citam.

@@ -99,7 +99,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Mostrar córtex")
-			.setDesc("Contorno anatômico: fissuras e sulcos principais, lobos, cerebelo e tronco.")
+			.setDesc("Contorno anatômico: fissuras e sulcos principais, lobos e cerebelo.")
 			.addToggle((t) =>
 				t.setValue(s.showCortex).onChange((v) => {
 					s.showCortex = v;
