@@ -332,13 +332,13 @@ export function cerebellumCenter(): Vec3 {
 }
 
 // ---------- Medula (estilizada) ----------
-// Tubo fino e afunilado ao longo de uma curva que desce e se inclina para trás. Mais grosso só no
-// topo (escondido sob o cérebro), termina num fio: sem "cabeça" arredondada nem volume na ponta.
+// Tubo afunilado ao longo de uma curva que desce e se inclina para trás, sem "cabeça" (ponte)
+// nem ponta arredondada: afina de forma uniforme e a extremidade só esmaece.
 const SPINE_P0: Vec3 = [0, -0.24, -0.24];
 const SPINE_P1: Vec3 = [0, -0.62, -0.3];
 const SPINE_P2: Vec3 = [0, -0.98, -0.5];
-const SPINE_TOP_RADIUS = 0.07;
-const SPINE_TIP_RADIUS = 0.006;
+const SPINE_TOP_RADIUS = 0.09;
+const SPINE_TIP_RADIUS = 0.04;
 
 /** Centro da medula no parâmetro t (0 = topo, 1 = ponta): Bézier quadrática. */
 function spineCenter(t: number, out: number[]): void {
@@ -346,9 +346,9 @@ function spineCenter(t: number, out: number[]): void {
 	for (let c = 0; c < 3; c++) out[c] = u * u * SPINE_P0[c] + 2 * u * t * SPINE_P1[c] + t * t * SPINE_P2[c];
 }
 
-/** Raio da medula: afina rápido no início e segue fino até a ponta. */
+/** Raio da medula: afunila de forma uniforme do topo até a ponta. */
 function spineRadius(t: number): number {
-	return SPINE_TIP_RADIUS + (SPINE_TOP_RADIUS - SPINE_TIP_RADIUS) * Math.pow(1 - t, 1.6);
+	return SPINE_TIP_RADIUS + (SPINE_TOP_RADIUS - SPINE_TIP_RADIUS) * (1 - t);
 }
 
 /** Base ortonormal perpendicular à curva em t (para varrer o círculo do tubo). */
@@ -385,7 +385,7 @@ function spineMesh(color: Vec3): SurfaceMesh {
 			const o = (i * SIDES + j) * 3;
 			for (let k = 0; k < 3; k++) positions[o + k] = c[k] + (n[k] * Math.cos(a) + b[k] * Math.sin(a)) * r;
 			// escurece em direção à ponta: a medula "some" no fundo
-			const fade = 1 - t * 0.6;
+			const fade = 1 - t * 0.45;
 			colors[o] = color[0] * fade;
 			colors[o + 1] = color[1] * fade;
 			colors[o + 2] = color[2] * fade;
@@ -557,11 +557,11 @@ export function sampleShell(rng: Rng): Shell {
 		n++;
 	}
 
-	// Medula: pontos na superfície do tubo, cada vez mais esparsos até se dissolverem na ponta.
+	// Medula: pontos na superfície do tubo, rareando só perto da ponta.
 	const sc = [0, 0, 0], sn = [0, 0, 0], sb = [0, 0, 0];
 	for (let k = 0; k < 900; k++) {
 		const t = rng();
-		if (rng() > Math.pow(1 - t, 1.3)) continue;
+		if (rng() > 1 - t * t * 0.7) continue; // esmaece só no final
 		spineFrame(t, sc, sn, sb);
 		const a = rng() * Math.PI * 2;
 		const r = spineRadius(t) * 1.02;
