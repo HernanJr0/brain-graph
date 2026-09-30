@@ -15,6 +15,8 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	hubLabels: true,
 	glow: true,
 	hoverPulses: true,
+	ambientPulses: true,
+	ambientCount: 30,
 	groupBy: "links",
 	showOrphans: true,
 };
@@ -94,6 +96,31 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 					s.hoverPulses = v;
 					void save();
 				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Pulsos ambientes")
+			.setDesc(
+				"Sinais lentos percorrendo o cérebro o tempo todo. Em repouso a tela é redesenhada a ~30 fps; desligue para custo zero parado.",
+			)
+			.addToggle((t) =>
+				t.setValue(s.ambientPulses).onChange((v) => {
+					s.ambientPulses = v;
+					void save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Quantidade de pulsos ambientes")
+			.addSlider((sl) =>
+				sl
+					.setLimits(5, 150, 5)
+					.setValue(s.ambientCount)
+					.setDynamicTooltip()
+					.onChange((v) => {
+						s.ambientCount = v;
+						void save();
+					}),
 			);
 
 		new Setting(containerEl)

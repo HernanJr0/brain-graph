@@ -33,6 +33,9 @@ export interface RenderOptions {
 	glow: boolean;
 	/** Sinais correndo pelos links da nota sob o mouse. */
 	hoverPulses: boolean;
+	/** Sinais lentos percorrendo o cérebro o tempo todo. */
+	ambientPulses: boolean;
+	ambientCount: number;
 }
 
 export interface RendererCallbacks {
@@ -83,6 +86,12 @@ const PULSE_TRAIL = 4;
 const TRAIL_STEP = 0.06;
 /** Links por segundo percorridos por um pulso. */
 const PULSE_SPEED = 0.35;
+/** Limite de pulsos ambientes (a geometria é alocada uma vez com este tamanho). */
+const AMBIENT_MAX = 150;
+/** Quando só os pulsos ambientes animam, desenha no máximo a ~30 fps (ritmo estável, metade do custo). */
+const AMBIENT_FRAME_MS = 31;
+/** Intensidade dos pulsos ambientes (mais discretos que os do hover). */
+const AMBIENT_INTENSITY = 0.45;
 /** Meta: nunca abaixo de 20 fps. O governador reduz a resolução se o frame passar disso. */
 const SLOW_FRAME_MS = 50;
 
@@ -221,6 +230,19 @@ export class BrainRenderer {
 	private readonly pulseDir = new Uint8Array(MAX_HOVER_PULSES);
 	private readonly pulseT = new Float32Array(MAX_HOVER_PULSES);
 	private pulseCount = 0;
+	private readonly ambientMat = pulseMaterial();
+	private readonly ambient: Points;
+	private readonly ambEdge = new Int32Array(AMBIENT_MAX);
+	private readonly ambDir = new Uint8Array(AMBIENT_MAX);
+	private readonly ambT = new Float32Array(AMBIENT_MAX);
+	private readonly ambSpeed = new Float32Array(AMBIENT_MAX);
+	private ambCount = 0;
+	private ambLast = 0;
+	private readonly ambRng = mulberry32(11);
+	private readonly ambColor = new Color();
+	/** Frame pedido por interação/mudança (desenha já) vs. continuação de animação (pode esperar o ritmo de 30 fps). */
+	private urgent = true;
+	private lastRender = 0;
 	private pulseLast = 0;
 	private readonly pulseColor = new Color();
 	private edges?: LineSegments;
@@ -295,6 +317,18 @@ export class BrainRenderer {
 		this.pulses.frustumCulled = false;
 		this.pulses.renderOrder = 4;
 		this.scene.add(this.pulses);
+
+		const ambPts = AMBIENT_MAX * PULSE_TRAIL;
+		const ambSize = new Float32Array(ambPts);
+		for (let p = 0; p < AMBIENT_MAX; p++)
+			for (let k = 0; k < PULSE_TRAIL; k++) ambSize[p * PULSE_TRAIL + k] = 0.022 * (1 - (k / PULSE_TRAIL) * 0.6);
+		const ambGeo = pointGeometry(new Float32Array(ambPts * 3), new Float32Array(ambPts * 3), ambSize);
+		(ambGeo.getAttribute("aHighlight") as BufferAttribute).array.fill(1);
+		this.ambientMat.uniforms.uIntensity.value = AMBIENT_INTENSITY;
+		this.ambient = new Points(ambGeo, this.ambientMat);
+		this.ambient.frustumCulled = false;
+		this.ambient.renderOrder = 4;
+		this.scene.add(this.ambient);
 		// Compila os shaders agora: sem isso, o 1º hover engasga (~30 ms) compilando o material dos pulsos.
 		this.renderer.compile(this.scene, this.persp);
 		this.pulses.visible = false;
@@ -327,6 +361,7 @@ export class BrainRenderer {
 		this.layout = new BrainLayout(graph, prev);
 		this.hover = -1;
 		this.pulseCount = 0;
+		this.buildAmbient();
 		this.search = [];
 		this.active = -1;
 		this.buildNodes();
@@ -355,6 +390,7 @@ export class BrainRenderer {
 	setOptions(partial: Partial<RenderOptions>): void {
 		const modeChanged = partial.mode !== undefined && partial.mode !== this.opts.mode;
 		const sizeChanged = partial.nodeSize !== undefined && partial.nodeSize !== this.opts.nodeSize;
+		const ambientChanged = partial.ambientCount !== undefined && partial.ambientCount !== this.opts.ambientCount;
 		this.opts = { ...this.opts, ...partial };
 		if (modeChanged) {
 			const dir = this.camera.position.clone().sub(this.controls.target).normalize();
@@ -362,6 +398,7 @@ export class BrainRenderer {
 			this.placeCamera(dir);
 		}
 		if (sizeChanged) this.buildNodes();
+		if (ambientChanged) this.buildAmbient();
 		this.setupPulses();
 		this.applyOptions();
 		this.refreshFocus();
@@ -420,6 +457,8 @@ export class BrainRenderer {
 		this.controls.dispose();
 		for (const obj of [this.shell, this.nodes, this.edges]) obj?.geometry.dispose();
 		this.pulses.geometry.dispose();
+		this.ambient.geometry.dispose();
+		this.ambientMat.dispose();
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.edgeMat]) m.dispose();
 		this.renderer.dispose();
 		this.renderer.forceContextLoss();
@@ -487,7 +526,7 @@ export class BrainRenderer {
 	private applyOptions(): void {
 		this.shell.visible = this.opts.showCortex;
 		const ortho = this.opts.mode === "2d" ? 1 : 0;
-		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat]) m.uniforms.uOrtho.value = ortho;
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) m.uniforms.uOrtho.value = ortho;
 		if (this.halo) this.halo.visible = this.opts.glow;
 	}
 
@@ -547,10 +586,18 @@ export class BrainRenderer {
 
 	// ---------- Loop sob demanda ----------
 
+	/** Pedido por interação ou mudança: o próximo frame desenha sem esperar. */
 	private readonly requestFrame = (): void => {
+		this.urgent = true;
 		if (this.disposed || this.raf) return;
 		this.raf = requestAnimationFrame(this.frame);
 	};
+
+	/** Continuação de animação: pode ser adiada para manter o ritmo de ~30 fps em repouso. */
+	private scheduleAnimation(): void {
+		if (this.disposed || this.raf) return;
+		this.raf = requestAnimationFrame(this.frame);
+	}
 
 	private readonly onControlsStart = (): void => {
 		this.dragging = true;
@@ -567,6 +614,12 @@ export class BrainRenderer {
 	private readonly frame = (now: number): void => {
 		this.raf = 0;
 		if (this.disposed || !this.visible || document.hidden) return;
+		// Só pulsos ambientes animando (nada de interação, layout ou hover): segura a ~30 fps.
+		const hoverAnimating = this.pulseCount > 0 && this.hover >= 0 && this.opts.hoverPulses;
+		if (!this.urgent && !this.dragging && !this.layout?.running && !hoverAnimating && now - this.lastRender < AMBIENT_FRAME_MS) {
+			this.raf = requestAnimationFrame(this.frame);
+			return;
+		}
 		const t0 = performance.now();
 
 		// Governador: durante arraste, se o intervalo entre frames passar de 50 ms (< 20 fps)
@@ -593,11 +646,14 @@ export class BrainRenderer {
 
 		if (this.pickDirty && !this.dragging) this.pick();
 		if (this.updatePulses(now)) keepGoing = true;
+		if (this.updateAmbient(now)) keepGoing = true;
 		this.updateUniforms();
 		this.renderer.render(this.scene, this.camera);
 		this.updateLabels();
+		this.urgent = false;
+		this.lastRender = now;
 
-		if (keepGoing) this.requestFrame();
+		if (keepGoing) this.scheduleAnimation();
 		this.recordStats(now, performance.now() - t0);
 	};
 
@@ -671,6 +727,83 @@ export class BrainRenderer {
 		}
 		attr.needsUpdate = true;
 		this.writeEdgeColors();
+	}
+
+	/** (Re)cria os pulsos ambientes espalhados pelo grafo. */
+	private buildAmbient(): void {
+		const g = this.graph;
+		const m = g ? g.edges.length / 2 : 0;
+		this.ambCount = m === 0 ? 0 : Math.min(this.opts.ambientCount, AMBIENT_MAX, m);
+		this.ambLast = 0;
+		for (let p = 0; p < this.ambCount; p++) {
+			this.spawnAmbient(p);
+			this.ambT[p] = this.ambRng(); // começam espalhados, não todos juntos
+		}
+	}
+
+	private spawnAmbient(p: number): void {
+		const m = this.graph!.edges.length / 2;
+		this.ambEdge[p] = Math.floor(this.ambRng() * m);
+		this.ambDir[p] = this.ambRng() < 0.5 ? 0 : 1;
+		this.ambT[p] = 0;
+		this.ambSpeed[p] = PULSE_SPEED * (0.7 + this.ambRng() * 0.6);
+	}
+
+	/** Avança os pulsos ambientes. Retorna true se precisa de mais frames. */
+	private updateAmbient(now: number): boolean {
+		const g = this.graph;
+		const active = !!g && this.opts.ambientPulses && this.ambCount > 0;
+		this.ambient.visible = active;
+		if (!active) return false;
+		const dt = this.ambLast ? Math.max(0, Math.min(0.05, (now - this.ambLast) / 1000)) : 0;
+		this.ambLast = now;
+		const geo = this.ambient.geometry;
+		const pArr = (geo.getAttribute("position") as BufferAttribute).array as Float32Array;
+		const cArr = (geo.getAttribute("aColor") as BufferAttribute).array as Float32Array;
+		const col = this.ambColor;
+		const pt = this.pt;
+		for (let p = 0; p < this.ambCount; p++) {
+			this.ambT[p] += this.ambSpeed[p] * dt;
+			if (this.ambT[p] >= 1) {
+				// Chegou: segue para outro link do neurônio de chegada (ou recomeça em outro lugar).
+				const e = this.ambEdge[p];
+				const target = g!.edges[e * 2 + (this.ambDir[p] ? 0 : 1)];
+				const options = g!.nodeEdges[target];
+				if (options.length > 1 && this.ambRng() < 0.7) {
+					let next = options[Math.floor(this.ambRng() * options.length)];
+					if (next === e) next = options[(options.indexOf(e) + 1) % options.length];
+					this.ambEdge[p] = next;
+					this.ambDir[p] = g!.edges[next * 2] === target ? 0 : 1;
+					this.ambT[p] = 0;
+				} else this.spawnAmbient(p);
+			}
+			const e = this.ambEdge[p];
+			const dir = this.ambDir[p];
+			const head = this.ambT[p];
+			col.copy(this.color(g!.group[g!.edges[e * 2 + 1 - dir]])).lerp(WHITE, 0.35);
+			const env = Math.sin(Math.PI * head);
+			for (let k = 0; k < PULSE_TRAIL; k++) {
+				const o = (p * PULSE_TRAIL + k) * 3;
+				const t = head - k * TRAIL_STEP;
+				if (t < 0) {
+					cArr[o] = cArr[o + 1] = cArr[o + 2] = 0;
+					continue;
+				}
+				const eased = t * t * (3 - 2 * t);
+				this.edgePoint(e, dir ? 1 - eased : eased, pt);
+				pArr[o] = pt[0];
+				pArr[o + 1] = pt[1];
+				pArr[o + 2] = pt[2];
+				const fade = env * (1 - k / PULSE_TRAIL);
+				cArr[o] = col.r * fade;
+				cArr[o + 1] = col.g * fade;
+				cArr[o + 2] = col.b * fade;
+			}
+		}
+		geo.setDrawRange(0, this.ambCount * PULSE_TRAIL);
+		(geo.getAttribute("position") as BufferAttribute).needsUpdate = true;
+		(geo.getAttribute("aColor") as BufferAttribute).needsUpdate = true;
+		return true;
 	}
 
 	/** Prepara um pulso por link da nota sob o mouse (vizinhos mais conectados primeiro). */
@@ -771,7 +904,7 @@ export class BrainRenderer {
 			this.opts.mode === "3d"
 				? this.height / (2 * Math.tan((this.persp.fov * Math.PI) / 360))
 				: (this.height * this.ortho.zoom) / (this.ortho.top - this.ortho.bottom);
-		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat]) {
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) {
 			m.uniforms.uScale.value = scale;
 			m.uniforms.uPixelRatio.value = pr;
 		}
@@ -866,6 +999,7 @@ export class BrainRenderer {
 		(this.nodes.geometry.getAttribute("aHighlight") as BufferAttribute).needsUpdate = true;
 		this.nodeMat.uniforms.uFocus.value = focus;
 		this.haloMat.uniforms.uFocus.value = focus;
+		this.ambientMat.uniforms.uIntensity.value = focus ? AMBIENT_INTENSITY * 0.25 : AMBIENT_INTENSITY;
 		this.labelSet = labels;
 
 		const e = g.edges;
