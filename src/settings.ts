@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	nodeSize: 1,
 	hubLabels: true,
 	glow: true,
+	hoverPulses: true,
 	groupBy: "links",
 	showOrphans: true,
 };
@@ -81,6 +82,16 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(s.glow).onChange((v) => {
 					s.glow = v;
+					void save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Pulsos no hover")
+			.setDesc("Ao parar o mouse numa nota, sinais correm pelos links dela. Só anima enquanto o mouse está em cima.")
+			.addToggle((t) =>
+				t.setValue(s.hoverPulses).onChange((v) => {
+					s.hoverPulses = v;
 					void save();
 				}),
 			);

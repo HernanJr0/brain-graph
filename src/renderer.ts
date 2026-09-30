@@ -31,6 +31,8 @@ export interface RenderOptions {
 	hubLabels: boolean;
 	/** Halo suave em volta dos nós. */
 	glow: boolean;
+	/** Sinais correndo pelos links da nota sob o mouse. */
+	hoverPulses: boolean;
 }
 
 export interface RendererCallbacks {
@@ -74,6 +76,13 @@ const PIXEL_BUDGET = 1.6e6;
 const MAX_POINT_PX = 28;
 /** Teto do halo em px: limita o custo de preenchimento com zoom. */
 const MAX_HALO_PX = 60;
+/** Pulsos do hover: no máximo um por link, até este limite (os vizinhos mais conectados primeiro). */
+const MAX_HOVER_PULSES = 40;
+/** Pontos por pulso: cabeça + rastro curto. */
+const PULSE_TRAIL = 4;
+const TRAIL_STEP = 0.06;
+/** Links por segundo percorridos por um pulso. */
+const PULSE_SPEED = 0.35;
 /** Meta: nunca abaixo de 20 fps. O governador reduz a resolução se o frame passar disso. */
 const SLOW_FRAME_MS = 50;
 
@@ -140,12 +149,22 @@ function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 	});
 }
 
+/** Pontos macios e aditivos para os pulsos (mesmo shader do halo, sem ampliar). */
+function pulseMaterial(): ShaderMaterial {
+	const m = haloMaterial();
+	m.uniforms.uSizeScale.value = 1;
+	m.uniforms.uMinSize.value = 3;
+	m.uniforms.uMaxSize.value = 26;
+	m.uniforms.uIntensity.value = 0.75;
+	return m;
+}
+
 function haloMaterial(): ShaderMaterial {
 	const m = pointMaterial(7, false);
 	m.fragmentShader = HALO_FRAG;
-	m.uniforms.uSizeScale.value = 2.8;
+	m.uniforms.uSizeScale.value = 2.3;
 	m.uniforms.uMaxSize.value = MAX_HALO_PX;
-	m.uniforms.uIntensity = { value: 0.42 };
+	m.uniforms.uIntensity = { value: 0.2 };
 	m.transparent = true;
 	m.blending = AdditiveBlending;
 	return m;
@@ -195,6 +214,15 @@ export class BrainRenderer {
 	private nodes?: Points;
 	/** Compartilha a geometria dos nós; só muda o material. */
 	private halo?: Points;
+	private readonly pulseMat = pulseMaterial();
+	private readonly pulses: Points;
+	/** Aresta, sentido (1 = percorre de b para a) e fase de cada pulso ativo. */
+	private readonly pulseEdge = new Int32Array(MAX_HOVER_PULSES);
+	private readonly pulseDir = new Uint8Array(MAX_HOVER_PULSES);
+	private readonly pulseT = new Float32Array(MAX_HOVER_PULSES);
+	private pulseCount = 0;
+	private pulseLast = 0;
+	private readonly pulseColor = new Color();
 	private edges?: LineSegments;
 	private colors: Color[] = [];
 	private edgeBase = new Float32Array(0);
@@ -256,6 +284,21 @@ export class BrainRenderer {
 		this.shell.renderOrder = 0;
 		this.scene.add(this.shell);
 
+		// Geometria dos pulsos alocada uma vez; só a quantidade desenhada muda.
+		const pulsePts = MAX_HOVER_PULSES * PULSE_TRAIL;
+		const pulseSize = new Float32Array(pulsePts);
+		for (let p = 0; p < MAX_HOVER_PULSES; p++)
+			for (let k = 0; k < PULSE_TRAIL; k++) pulseSize[p * PULSE_TRAIL + k] = 0.026 * (1 - (k / PULSE_TRAIL) * 0.6);
+		const pulseGeo = pointGeometry(new Float32Array(pulsePts * 3), new Float32Array(pulsePts * 3), pulseSize);
+		(pulseGeo.getAttribute("aHighlight") as BufferAttribute).array.fill(1); // nunca esmaecidos pelo foco
+		this.pulses = new Points(pulseGeo, this.pulseMat);
+		this.pulses.frustumCulled = false;
+		this.pulses.renderOrder = 4;
+		this.scene.add(this.pulses);
+		// Compila os shaders agora: sem isso, o 1º hover engasga (~30 ms) compilando o material dos pulsos.
+		this.renderer.compile(this.scene, this.persp);
+		this.pulses.visible = false;
+
 		this.setupControls();
 		this.resize();
 		this.applyPreset("lateral");
@@ -283,6 +326,7 @@ export class BrainRenderer {
 		this.colors = Array.from({ length: graph.groupCount + 1 }, (_, k) => groupColor(k - 1));
 		this.layout = new BrainLayout(graph, prev);
 		this.hover = -1;
+		this.pulseCount = 0;
 		this.search = [];
 		this.active = -1;
 		this.buildNodes();
@@ -318,6 +362,7 @@ export class BrainRenderer {
 			this.placeCamera(dir);
 		}
 		if (sizeChanged) this.buildNodes();
+		this.setupPulses();
 		this.applyOptions();
 		this.refreshFocus();
 		this.requestFrame();
@@ -374,7 +419,8 @@ export class BrainRenderer {
 		el.removeEventListener("pointerleave", this.onPointerLeave);
 		this.controls.dispose();
 		for (const obj of [this.shell, this.nodes, this.edges]) obj?.geometry.dispose();
-		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.edgeMat]) m.dispose();
+		this.pulses.geometry.dispose();
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.edgeMat]) m.dispose();
 		this.renderer.dispose();
 		this.renderer.forceContextLoss();
 		el.remove();
@@ -441,7 +487,7 @@ export class BrainRenderer {
 	private applyOptions(): void {
 		this.shell.visible = this.opts.showCortex;
 		const ortho = this.opts.mode === "2d" ? 1 : 0;
-		for (const m of [this.shellMat, this.nodeMat, this.haloMat]) m.uniforms.uOrtho.value = ortho;
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat]) m.uniforms.uOrtho.value = ortho;
 		if (this.halo) this.halo.visible = this.opts.glow;
 	}
 
@@ -546,6 +592,7 @@ export class BrainRenderer {
 		}
 
 		if (this.pickDirty && !this.dragging) this.pick();
+		if (this.updatePulses(now)) keepGoing = true;
 		this.updateUniforms();
 		this.renderer.render(this.scene, this.camera);
 		this.updateLabels();
@@ -626,6 +673,66 @@ export class BrainRenderer {
 		this.writeEdgeColors();
 	}
 
+	/** Prepara um pulso por link da nota sob o mouse (vizinhos mais conectados primeiro). */
+	private setupPulses(): void {
+		this.pulseCount = 0;
+		this.pulseLast = 0;
+		const g = this.graph;
+		if (!g || this.hover < 0 || !this.opts.hoverPulses) return;
+		const h = this.hover;
+		const edges = [...g.nodeEdges[h]]
+			.sort((a, b) => g.degree[g.edges[b * 2] ^ g.edges[b * 2 + 1] ^ h] - g.degree[g.edges[a * 2] ^ g.edges[a * 2 + 1] ^ h])
+			.slice(0, MAX_HOVER_PULSES);
+		edges.forEach((e, p) => {
+			this.pulseEdge[p] = e;
+			this.pulseDir[p] = g.edges[e * 2] === h ? 0 : 1; // sempre saindo da nota sob o mouse
+			this.pulseT[p] = (p * 0.37) % 1; // fases espalhadas: não saem todos juntos
+		});
+		this.pulseCount = edges.length;
+		this.pulseColor.copy(this.color(g.group[h])).lerp(WHITE, 0.45);
+	}
+
+	/** Avança os pulsos. Retorna true se precisa de mais frames. */
+	private updatePulses(now: number): boolean {
+		const active = this.pulseCount > 0 && this.hover >= 0 && !this.dragging && this.opts.hoverPulses;
+		this.pulses.visible = active;
+		if (!active) return false;
+		const dt = this.pulseLast ? Math.max(0, Math.min(0.05, (now - this.pulseLast) / 1000)) : 0;
+		this.pulseLast = now;
+		const geo = this.pulses.geometry;
+		const pArr = (geo.getAttribute("position") as BufferAttribute).array as Float32Array;
+		const cArr = (geo.getAttribute("aColor") as BufferAttribute).array as Float32Array;
+		const col = this.pulseColor;
+		const pt = this.pt;
+		for (let p = 0; p < this.pulseCount; p++) {
+			this.pulseT[p] = (this.pulseT[p] + PULSE_SPEED * dt) % 1;
+			const head = this.pulseT[p];
+			const env = Math.sin(Math.PI * head); // aparece ao sair, some ao chegar
+			for (let k = 0; k < PULSE_TRAIL; k++) {
+				const o = (p * PULSE_TRAIL + k) * 3;
+				const t = head - k * TRAIL_STEP;
+				if (t < 0) {
+					cArr[o] = cArr[o + 1] = cArr[o + 2] = 0; // aditivo: cor 0 = invisível
+					continue;
+				}
+				// Easing: acelera ao sair da nota e desacelera ao chegar no vizinho.
+				const eased = t * t * (3 - 2 * t);
+				this.edgePoint(this.pulseEdge[p], this.pulseDir[p] ? 1 - eased : eased, pt);
+				pArr[o] = pt[0];
+				pArr[o + 1] = pt[1];
+				pArr[o + 2] = pt[2];
+				const fade = env * (1 - k / PULSE_TRAIL);
+				cArr[o] = col.r * fade;
+				cArr[o + 1] = col.g * fade;
+				cArr[o + 2] = col.b * fade;
+			}
+		}
+		geo.setDrawRange(0, this.pulseCount * PULSE_TRAIL);
+		(geo.getAttribute("position") as BufferAttribute).needsUpdate = true;
+		(geo.getAttribute("aColor") as BufferAttribute).needsUpdate = true;
+		return true;
+	}
+
 	private edgePoint(k: number, t: number, out: number[]): void {
 		const e = this.graph!.edges;
 		const pos = this.layout!.pos;
@@ -664,7 +771,7 @@ export class BrainRenderer {
 			this.opts.mode === "3d"
 				? this.height / (2 * Math.tan((this.persp.fov * Math.PI) / 360))
 				: (this.height * this.ortho.zoom) / (this.ortho.top - this.ortho.bottom);
-		for (const m of [this.shellMat, this.nodeMat, this.haloMat]) {
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat]) {
 			m.uniforms.uScale.value = scale;
 			m.uniforms.uPixelRatio.value = pr;
 		}
@@ -724,6 +831,7 @@ export class BrainRenderer {
 		}
 		if (best !== this.hover) {
 			this.hover = best;
+			this.setupPulses();
 			this.renderer.domElement.style.cursor = best >= 0 ? "pointer" : "";
 			this.refreshFocus();
 		}
@@ -804,3 +912,5 @@ export class BrainRenderer {
 		}
 	}
 }
+
+const WHITE = new Color(1, 1, 1);
