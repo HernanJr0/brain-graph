@@ -1,0 +1,9 @@
+{
+  "id": "brain-graph",
+  "name": "Brain Graph",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Graph view leve em 2D/3D com formato de cérebro.",
+  "author": "Hernan",
+  "isDesktopOnly": false
+}

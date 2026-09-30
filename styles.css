@@ -1,0 +1,136 @@
+.brain-graph-container {
+	padding: 0 !important;
+	position: relative;
+	overflow: hidden;
+}
+
+.brain-graph-stage {
+	position: absolute;
+	inset: 0;
+	background: radial-gradient(ellipse at 50% 45%, #0e1630 0%, #060913 55%, #020308 100%);
+}
+
+.brain-graph-stage canvas {
+	display: block;
+	outline: none;
+	touch-action: none;
+}
+
+.brain-graph-labels {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.brain-graph-label {
+	position: absolute;
+	left: 0;
+	top: 0;
+	font-size: 11px;
+	line-height: 1;
+	padding: 2px 5px;
+	border-radius: 4px;
+	color: rgba(225, 235, 255, 0.92);
+	background: rgba(4, 7, 16, 0.62);
+	white-space: nowrap;
+	will-change: transform;
+}
+
+.brain-graph-label.is-hub {
+	font-size: 10px;
+	color: rgba(205, 220, 255, 0.78);
+	background: rgba(4, 7, 16, 0.45);
+}
+
+.brain-graph-label.is-hover,
+.brain-graph-label.is-active {
+	color: #fff;
+	font-weight: 600;
+	font-size: 12px;
+}
+
+.brain-graph-label.is-active {
+	color: #ffe9a8;
+}
+
+.brain-graph-toolbar {
+	position: absolute;
+	top: 8px;
+	left: 8px;
+	right: 8px;
+	z-index: 2;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+	pointer-events: none;
+}
+
+.brain-graph-toolbar > * {
+	pointer-events: auto;
+}
+
+.brain-graph-group {
+	display: flex;
+	gap: 2px;
+}
+
+.brain-graph-toolbar .brain-graph-btn {
+	height: 26px;
+	padding: 0 9px;
+	font-size: 12px;
+	color: #cfe0ff;
+	background: rgba(18, 26, 48, 0.75);
+	border: 1px solid rgba(120, 160, 255, 0.2);
+	border-radius: 6px;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.brain-graph-toolbar .brain-graph-btn:hover {
+	background: rgba(40, 56, 100, 0.85);
+}
+
+.brain-graph-toolbar .brain-graph-btn.is-active {
+	background: rgba(80, 120, 255, 0.35);
+	border-color: rgba(140, 180, 255, 0.6);
+}
+
+.brain-graph-toolbar .brain-graph-btn svg {
+	width: 14px;
+	height: 14px;
+}
+
+.brain-graph-toolbar .brain-graph-mode {
+	font-weight: 700;
+	min-width: 40px;
+}
+
+.brain-graph-toolbar .brain-graph-search {
+	height: 26px;
+	width: 160px;
+	font-size: 12px;
+	color: #e6eeff;
+	background: rgba(18, 26, 48, 0.75);
+	border: 1px solid rgba(120, 160, 255, 0.2);
+	border-radius: 6px;
+}
+
+.brain-graph-stats {
+	margin-left: auto;
+	font-size: 11px;
+	color: rgba(190, 210, 255, 0.55);
+	pointer-events: none;
+}
+
+.brain-graph-perf {
+	position: absolute;
+	left: 10px;
+	bottom: 8px;
+	z-index: 2;
+	font-family: var(--font-monospace);
+	font-size: 11px;
+	color: rgba(190, 210, 255, 0.7);
+	pointer-events: none;
+}
