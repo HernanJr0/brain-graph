@@ -1,0 +1,63 @@
+name: Release
+
+# Publica um release a cada tag de versão (v0.1.7 ou 0.1.7).
+# Para (re)publicar uma tag antiga: Actions → Release → Run workflow → informe a tag.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag a publicar (ex.: v0.1.6)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Conferir versão
+        run: |
+          version="$(node -p "require('./manifest.json').version")"
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::A tag $TAG não bate com a versão do manifest.json ($version)."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Empacotar zip
+        run: |
+          mkdir -p dist/brain-graph
+          cp main.js manifest.json styles.css dist/brain-graph/
+          (cd dist && zip -r "../brain-graph-$VERSION.zip" brain-graph)
+
+      - name: Criar ou atualizar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets="main.js manifest.json styles.css brain-graph-$VERSION.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $assets --clobber
+          else
+            gh release create "$TAG" $assets --title "Brain Graph $VERSION" --verify-tag --generate-notes
+          fi
