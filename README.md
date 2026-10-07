@@ -21,8 +21,8 @@ An Obsidian plugin that draws your vault as a brain, in 2D or 3D. It's a lightwe
 
 ### Manual
 
-1. Download `brain-graph-X.Y.Z.zip` from the [latest release](https://github.com/HernanJr0/brain-graph/releases/latest).
-2. Extract it into `<vault>/.obsidian/plugins/`. You should end up with `.obsidian/plugins/brain-graph/` containing `main.js`, `manifest.json` and `styles.css`.
+1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/HernanJr0/brain-graph/releases/latest).
+2. Put them in `<vault>/.obsidian/plugins/brain-graph/` (create the folder if needed).
 3. In *Settings → Community plugins*, reload the list and enable **Brain Graph**.
 
 Open it from the brain icon in the ribbon or with Ctrl/Cmd+P → "Brain Graph: Open graph view".
@@ -66,7 +66,7 @@ The plugin is built to run at 20 fps or more on integrated GPUs.
 
 ## Privacy
 
-Brain Graph works fully offline. It reads your notes' links through Obsidian's metadata cache, makes no network requests, and only writes `data.json` (settings) and `layout.json` (positions) inside its own plugin folder.
+Brain Graph works fully offline. It lists the Markdown files in your vault and reads their links through Obsidian's metadata cache to build the graph; note contents never leave your machine. It makes no network requests, and only writes `data.json` (settings) and `layout.json` (positions) inside its own plugin folder.
 
 ## Development
 
@@ -125,7 +125,7 @@ Releases are published by GitHub Actions (`.github/workflows/release.yml`):
 
 1. Update `version` in `manifest.json` and `package.json`, and add the version to `versions.json`.
 2. Commit, create an annotated tag **without a `v` prefix** (Obsidian requires the tag to match the manifest version exactly) and push: `git tag -a 1.0.1 -m "Brain Graph 1.0.1" && git push origin main 1.0.1`.
-3. The workflow checks that the tag matches `manifest.json`, builds, and publishes `main.js`, `manifest.json`, `styles.css` and `brain-graph-X.Y.Z.zip`.
+3. The workflow checks that the tag matches `manifest.json`, builds, attests the build provenance, and publishes `main.js`, `manifest.json` and `styles.css`.
 
 To republish an existing tag, use *Actions → Release → Run workflow* and enter the tag.
 

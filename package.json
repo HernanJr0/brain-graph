@@ -1,6 +1,6 @@
 {
   "name": "brain-graph",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lightweight 2D/3D brain-shaped graph view for Obsidian.",
   "main": "main.js",
   "scripts": {

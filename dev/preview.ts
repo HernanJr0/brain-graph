@@ -3,6 +3,18 @@ import { mulberry32 } from "../src/brain-shape";
 import { buildGraphCore, type LinkMap } from "../src/graph-core";
 import { BrainRenderer } from "../src/renderer";
 
+// O renderer usa helpers de DOM que o Obsidian adiciona ao HTMLElement; fora dele, um polyfill mínimo.
+declare global {
+	interface HTMLElement {
+		createDiv(o?: { cls?: string }): HTMLDivElement;
+	}
+}
+HTMLElement.prototype.createDiv ??= function (this: HTMLElement, o?: { cls?: string }) {
+	const el = document.createElement("div");
+	if (o?.cls) el.className = o.cls;
+	return this.appendChild(el);
+};
+
 const params = new URLSearchParams(location.search);
 const N = Number(params.get("n") ?? 1500);
 const rng = mulberry32(99);

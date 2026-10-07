@@ -1,5 +1,9 @@
+/* Mesmo padrão das views nativas (canvas, pdf…) para tirar o padding da view. */
+.workspace-leaf-content[data-type="brain-graph-view"] .view-content.brain-graph-container {
+	padding: 0;
+}
+
 .brain-graph-container {
-	padding: 0 !important;
 	position: relative;
 	overflow: hidden;
 }
@@ -35,6 +39,10 @@
 	background: rgba(4, 7, 16, 0.62);
 	white-space: nowrap;
 	will-change: transform;
+}
+
+.brain-graph-label.is-hidden {
+	display: none;
 }
 
 .brain-graph-label.is-hub {

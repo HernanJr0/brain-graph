@@ -406,6 +406,8 @@ export class BrainRenderer {
 	private downX = 0;
 	private downY = 0;
 	private raf = 0;
+	/** Janela onde o frame foi pedido (o canvas pode estar numa janela destacada do Obsidian). */
+	private rafWin: Window = window;
 	private lastFrame = 0;
 	private disposed = false;
 	private visible = true;
@@ -429,9 +431,7 @@ export class BrainRenderer {
 		this.renderer.setClearColor(BG, 1);
 		container.appendChild(this.renderer.domElement);
 
-		this.labelLayer = document.createElement("div");
-		this.labelLayer.className = "brain-graph-labels";
-		container.appendChild(this.labelLayer);
+		this.labelLayer = container.createDiv({ cls: "brain-graph-labels" });
 
 		const shell = sampleShell(mulberry32(3));
 		const shellSize = new Float32Array(shell.positions.length / 3).fill(0.007);
@@ -612,7 +612,7 @@ export class BrainRenderer {
 
 	dispose(): void {
 		this.disposed = true;
-		cancelAnimationFrame(this.raf);
+		this.rafWin.cancelAnimationFrame(this.raf);
 		this.observer.disconnect();
 		document.removeEventListener("visibilitychange", this.requestFrame);
 		const el = this.renderer.domElement;
@@ -772,13 +772,18 @@ export class BrainRenderer {
 	private readonly requestFrame = (): void => {
 		this.urgent = true;
 		if (this.disposed || this.raf) return;
-		this.raf = requestAnimationFrame(this.frame);
+		this.raf = this.nextFrame();
 	};
 
 	/** Continuação de animação: pode ser adiada para manter o ritmo de ~30 fps em repouso. */
 	private scheduleAnimation(): void {
 		if (this.disposed || this.raf) return;
-		this.raf = requestAnimationFrame(this.frame);
+		this.raf = this.nextFrame();
+	}
+
+	private nextFrame(): number {
+		this.rafWin = this.renderer.domElement.ownerDocument.defaultView ?? window;
+		return this.rafWin.requestAnimationFrame(this.frame);
 	}
 
 	private readonly onControlsStart = (): void => {
@@ -799,7 +804,7 @@ export class BrainRenderer {
 		// Só pulsos ambientes animando (nada de interação, layout ou hover): segura a ~30 fps.
 		const hoverAnimating = this.pulseCount > 0 && this.hover >= 0 && this.opts.hoverPulses;
 		if (!this.urgent && !this.dragging && !this.layout?.running && !hoverAnimating && now - this.lastRender < AMBIENT_FRAME_MS) {
-			this.raf = requestAnimationFrame(this.frame);
+			this.raf = this.nextFrame();
 			return;
 		}
 		const t0 = performance.now();
@@ -1050,8 +1055,8 @@ export class BrainRenderer {
 			this.ambT[p] += this.ambSpeed[p] * dt;
 			if (this.ambT[p] >= 1) {
 				const e = this.ambEdge[p];
-				const target = g!.edges[e * 2 + (this.ambDir[p] ? 0 : 1)];
-				const options = g!.nodeEdges[target];
+				const target = g.edges[e * 2 + (this.ambDir[p] ? 0 : 1)];
+				const options = g.nodeEdges[target];
 				const gen = this.ambGen[p];
 				// Chegou: o neurônio cintila (forte numa reação em cadeia, de leve num pulso comum).
 				this.flashTarget[target] = Math.min(1, this.flashTarget[target] + (gen > 0 ? 0.9 : 0.3));
@@ -1074,7 +1079,7 @@ export class BrainRenderer {
 					let next = options[Math.floor(this.ambRng() * options.length)];
 					if (next === e) next = options[(options.indexOf(e) + 1) % options.length];
 					this.ambEdge[p] = next;
-					this.ambDir[p] = g!.edges[next * 2] === target ? 0 : 1;
+					this.ambDir[p] = g.edges[next * 2] === target ? 0 : 1;
 					this.ambT[p] = 0;
 				} else if (this.opts.ambientPulses) this.spawnAmbient(p);
 				else {
@@ -1085,7 +1090,7 @@ export class BrainRenderer {
 			const e = this.ambEdge[p];
 			const dir = this.ambDir[p];
 			const head = this.ambT[p];
-			col.copy(this.color(g!.group[g!.edges[e * 2 + 1 - dir]])).lerp(WHITE, this.ambGen[p] > 0 ? 0.6 : 0.35);
+			col.copy(this.color(g.group[g.edges[e * 2 + 1 - dir]])).lerp(WHITE, this.ambGen[p] > 0 ? 0.6 : 0.35);
 			if (this.ambGen[p] > 0) col.multiplyScalar(1.5); // reação em cadeia: mais brilhante (aditivo)
 			const env = Math.sin(Math.PI * head);
 			for (let k = 0; k < PULSE_TRAIL; k++) {
@@ -1434,10 +1439,7 @@ export class BrainRenderer {
 		const g = this.graph;
 		const set = this.labelSet;
 		while (this.labelPool.length < set.length) {
-			const el = document.createElement("div");
-			el.className = "brain-graph-label";
-			this.labelLayer.appendChild(el);
-			this.labelPool.push(el);
+			this.labelPool.push(this.labelLayer.createDiv({ cls: "brain-graph-label is-hidden" }));
 		}
 		if (!g || !this.layout) return;
 		const cam = this.camera;
@@ -1445,15 +1447,14 @@ export class BrainRenderer {
 			const el = this.labelPool[k];
 			const item = set[k];
 			if (!item) {
-				if (el.style.display !== "none") el.style.display = "none";
+				el.classList.add("is-hidden");
 				continue;
 			}
 			this.tmp.fromArray(this.view, item.i * 3).project(cam);
 			if (this.tmp.z > 1 || (item.cls !== "is-active" && (!this.facesCamera(item.i) || this.isFar(item.i)))) {
-				el.style.display = "none";
+				el.classList.add("is-hidden");
 				continue;
 			}
-			el.style.display = "";
 			const text = g.names[item.i];
 			if (el.textContent !== text) el.textContent = text;
 			const cls = "brain-graph-label " + item.cls;

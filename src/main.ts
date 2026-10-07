@@ -17,7 +17,7 @@ export default class BrainGraphPlugin extends Plugin {
 		}
 
 		this.registerView(VIEW_TYPE_BRAIN, (leaf) => new BrainGraphView(leaf, this));
-		this.addRibbonIcon("brain", "Open Brain Graph", () => void this.activateView());
+		this.addRibbonIcon("brain", "Open graph view", () => void this.activateView());
 
 		this.addCommand({
 			id: "open",

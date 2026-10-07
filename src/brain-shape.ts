@@ -516,7 +516,7 @@ export interface Shell {
  * sulcos secundários discretos levemente tingidos por lobo, cerebelo com folhas e medula.
  */
 export function sampleShell(rng: Rng): Shell {
-	const { hemi, cereb } = surfaces();
+	const { cereb } = surfaces();
 	const pts: number[] = [];
 	const cols: number[] = [];
 	const d = [0, 0, 0];
