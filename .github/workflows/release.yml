@@ -58,6 +58,7 @@ jobs:
           assets="main.js manifest.json styles.css brain-graph-$VERSION.zip"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" $assets --clobber
+            gh release edit "$TAG" --draft=false  # se a tag foi recriada, o GitHub deixa o release como rascunho
           else
             gh release create "$TAG" $assets --title "Brain Graph $VERSION" --verify-tag --generate-notes
           fi
