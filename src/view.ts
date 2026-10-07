@@ -52,7 +52,7 @@ export class BrainGraphView extends ItemView {
 			onStats: (st) => {
 				const ok = st.fps >= 20 ? "" : " ⚠";
 				this.perfEl?.setText(
-					`${st.fps.toFixed(0)} fps${ok} · pior ${st.worstGapMs.toFixed(0)} ms · cpu ${st.cpuMs.toFixed(1)} ms · ${st.bufferWidth}×${st.bufferHeight}`,
+					`${st.fps.toFixed(0)} fps${ok} · worst ${st.worstGapMs.toFixed(0)} ms · cpu ${st.cpuMs.toFixed(1)} ms · ${st.bufferWidth}×${st.bufferHeight}`,
 				);
 			},
 		});
@@ -123,7 +123,7 @@ export class BrainGraphView extends ItemView {
 		this.renderer.setGraph(graph, prev);
 		this.syncActive();
 		const links = graph.edges.length / 2;
-		this.statsEl?.setText(`${graph.ids.length} notas · ${links} links · ${graph.groupCount} regiões`);
+		this.statsEl?.setText(`${graph.ids.length} notes · ${links} links · ${graph.groupCount} regions`);
 	}
 
 	private readonly saveLayout = debounce(
@@ -161,7 +161,7 @@ export class BrainGraphView extends ItemView {
 		this.buttons.mode = mode;
 
 		const presets = bar.createDiv({ cls: "brain-graph-group" });
-		const presetLabels: Record<ViewPreset, string> = { lateral: "Lateral", superior: "Topo", frontal: "Frente" };
+		const presetLabels: Record<ViewPreset, string> = { lateral: "Side", superior: "Top", frontal: "Front" };
 		for (const key of Object.keys(presetLabels) as ViewPreset[]) {
 			const b = presets.createEl("button", { cls: "brain-graph-btn", text: presetLabels[key] });
 			b.onclick = () => this.renderer?.applyPreset(key);
@@ -176,15 +176,15 @@ export class BrainGraphView extends ItemView {
 			};
 			this.buttons[key] = b;
 		};
-		toggle("showCortex", "brain", "Mostrar córtex");
-		toggle("surface", "layers", "Superfície do cérebro");
-		toggle("dof", "aperture", "Profundidade de campo");
-		toggle("glow", "sparkles", "Brilho dos nós");
-		toggle("ambientPulses", "activity", "Pulsos ambientes");
+		toggle("showCortex", "brain", "Show cortex");
+		toggle("surface", "layers", "Brain surface");
+		toggle("dof", "aperture", "Depth of field");
+		toggle("glow", "sparkles", "Node glow");
+		toggle("ambientPulses", "activity", "Ambient pulses");
 
 		const search = bar.createEl("input", {
 			cls: "brain-graph-search",
-			attr: { type: "search", placeholder: "Buscar nota…", spellcheck: "false" },
+			attr: { type: "search", placeholder: "Search notes…", spellcheck: "false" },
 		});
 		search.addEventListener("input", () => {
 			const q = search.value.trim().toLowerCase();
@@ -200,14 +200,14 @@ export class BrainGraphView extends ItemView {
 		});
 
 		this.statsEl = bar.createDiv({ cls: "brain-graph-stats" });
-		this.perfEl = root.createDiv({ cls: "brain-graph-perf", text: "gire a câmera para medir o fps" });
+		this.perfEl = root.createDiv({ cls: "brain-graph-perf", text: "rotate the camera to measure fps" });
 		this.refreshButtons();
 	}
 
 	private refreshButtons(): void {
 		const s = this.plugin.settings;
 		this.buttons.mode?.setText(s.mode === "3d" ? "3D" : "2D");
-		this.buttons.mode?.setAttr("aria-label", s.mode === "3d" ? "Mudar para 2D" : "Mudar para 3D");
+		this.buttons.mode?.setAttr("aria-label", s.mode === "3d" ? "Switch to 2D" : "Switch to 3D");
 		this.buttons.showCortex?.toggleClass("is-active", s.showCortex);
 		this.buttons.surface?.toggleClass("is-active", s.surface);
 		this.buttons.dof?.toggleClass("is-active", s.dof);

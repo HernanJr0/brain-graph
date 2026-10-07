@@ -17,21 +17,21 @@ export default class BrainGraphPlugin extends Plugin {
 		}
 
 		this.registerView(VIEW_TYPE_BRAIN, (leaf) => new BrainGraphView(leaf, this));
-		this.addRibbonIcon("brain", "Abrir Brain Graph", () => void this.activateView());
+		this.addRibbonIcon("brain", "Open Brain Graph", () => void this.activateView());
 
 		this.addCommand({
 			id: "open",
-			name: "Abrir Brain Graph",
+			name: "Open graph view",
 			callback: () => void this.activateView(),
 		});
 		this.addCommand({
 			id: "relayout",
-			name: "Recalcular layout do cérebro",
+			name: "Recalculate layout",
 			callback: () => this.relayout(),
 		});
 		this.addCommand({
 			id: "toggle-mode",
-			name: "Alternar 2D/3D",
+			name: "Toggle 2D/3D",
 			callback: () => {
 				this.settings.mode = this.settings.mode === "3d" ? "2d" : "3d";
 				void this.saveSettings(false);
@@ -75,7 +75,7 @@ export default class BrainGraphPlugin extends Plugin {
 			if (data.version !== LAYOUT_VERSION || data.groupBy !== this.settings.groupBy) return undefined;
 			return new Map(Object.entries(data.positions));
 		} catch (err) {
-			console.warn("Brain Graph: layout.json inválido, recalculando.", err);
+			console.warn("Brain Graph: invalid layout.json, recalculating.", err);
 			return undefined;
 		}
 	}

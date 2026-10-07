@@ -40,11 +40,11 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 		const save = (rebuild: false | "keep" | "fresh" = false) => this.plugin.saveSettings(rebuild);
 
 		new Setting(containerEl)
-			.setName("Modo padrão")
-			.setDesc("Como o grafo abre. Dá para alternar pela barra do próprio grafo.")
+			.setName("Default mode")
+			.setDesc("How the graph opens. You can also switch from the graph toolbar.")
 			.addDropdown((d) =>
 				d
-					.addOptions({ "3d": "3D (orbitar)", "2d": "2D (vista plana)" })
+					.addOptions({ "3d": "3D (orbit)", "2d": "2D (flat view)" })
 					.setValue(s.mode)
 					.onChange((v) => {
 						s.mode = v as RenderOptions["mode"];
@@ -53,11 +53,11 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Agrupar regiões por")
-			.setDesc("Cada grupo vira uma região do córtex. Links usa detecção de comunidades.")
+			.setName("Group regions by")
+			.setDesc("Each group becomes a region of the cortex. Links uses community detection.")
 			.addDropdown((d) =>
 				d
-					.addOptions({ links: "Links (comunidades)", folder: "Pasta de primeiro nível" })
+					.addOptions({ links: "Links (communities)", folder: "Top-level folder" })
 					.setValue(s.groupBy)
 					.onChange((v) => {
 						s.groupBy = v as GroupBy;
@@ -66,8 +66,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Mostrar notas órfãs")
-			.setDesc("Notas sem links ficam no cerebelo.")
+			.setName("Show orphan notes")
+			.setDesc("Notes without links sit in the cerebellum.")
 			.addToggle((t) =>
 				t.setValue(s.showOrphans).onChange((v) => {
 					s.showOrphans = v;
@@ -76,9 +76,9 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Superfície do cérebro")
+			.setName("Brain surface")
 			.setDesc(
-				"Ligada: superfície escura semitransparente com as notas por fora e links em arco. Desligada: nuvem de pontos transparente com as notas dentro do córtex e links mergulhando para o centro.",
+				"On: dark translucent surface with notes on the outside and arched links. Off: transparent point cloud with notes inside the cortex and links diving toward the center.",
 			)
 			.addToggle((t) =>
 				t.setValue(s.surface).onChange((v) => {
@@ -88,8 +88,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Profundidade de campo")
-			.setDesc("Notas e links atrás do centro do cérebro ficam desfocados e esmaecidos, destacando o que está na frente.")
+			.setName("Depth of field")
+			.setDesc("Notes and links behind the center of the brain are blurred and dimmed, highlighting what is in front.")
 			.addToggle((t) =>
 				t.setValue(s.dof).onChange((v) => {
 					s.dof = v;
@@ -98,8 +98,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Mostrar córtex")
-			.setDesc("Contorno anatômico: fissuras e sulcos principais, lobos, cerebelo e medula.")
+			.setName("Show cortex")
+			.setDesc("Anatomical outline: main fissures and sulci, lobes, cerebellum and brainstem.")
 			.addToggle((t) =>
 				t.setValue(s.showCortex).onChange((v) => {
 					s.showCortex = v;
@@ -108,8 +108,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Brilho dos nós")
-			.setDesc("Halo suave em volta de cada nota. Custo mínimo: só é desenhado quando a tela muda.")
+			.setName("Node glow")
+			.setDesc("Soft halo around each note. Minimal cost: only drawn when the view changes.")
 			.addToggle((t) =>
 				t.setValue(s.glow).onChange((v) => {
 					s.glow = v;
@@ -118,8 +118,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Pulsos no hover")
-			.setDesc("Ao parar o mouse numa nota, sinais correm pelos links dela. Só anima enquanto o mouse está em cima.")
+			.setName("Hover pulses")
+			.setDesc("Hovering a note sends signals along its links. Only animates while the pointer is over it.")
 			.addToggle((t) =>
 				t.setValue(s.hoverPulses).onChange((v) => {
 					s.hoverPulses = v;
@@ -128,9 +128,9 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Pulsos ambientes")
+			.setName("Ambient pulses")
 			.setDesc(
-				"Sinais lentos percorrendo o cérebro o tempo todo. Em repouso a tela é redesenhada a ~30 fps; desligue para custo zero parado.",
+				"Slow signals travel through the brain all the time. While idle the view redraws at ~30 fps; turn off for zero cost when still.",
 			)
 			.addToggle((t) =>
 				t.setValue(s.ambientPulses).onChange((v) => {
@@ -140,7 +140,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Quantidade de pulsos ambientes")
+			.setName("Ambient pulse count")
 			.addSlider((sl) =>
 				sl
 					.setLimits(5, 150, 5)
@@ -153,9 +153,9 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Tela de descanso")
+			.setName("Idle animation")
 			.setDesc(
-				"Depois de ~1,5 s sem mexer: onda de atividade, reações em cadeia entre notas, brilho respirando e a interface some. Qualquer movimento volta ao normal.",
+				"After ~1.5 s without input: a wave of activity, chain reactions between notes, breathing glow, and the interface fades out. Any movement brings it back.",
 			)
 			.addToggle((t) =>
 				t.setValue(s.idleAnimation).onChange((v) => {
@@ -165,8 +165,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Órbita na tela de descanso")
-			.setDesc("A câmera gira lentamente em volta do cérebro enquanto ele está em repouso (modo 3D).")
+			.setName("Idle orbit")
+			.setDesc("The camera slowly orbits the brain while idle (3D mode).")
 			.addToggle((t) =>
 				t.setValue(s.idleOrbit).onChange((v) => {
 					s.idleOrbit = v;
@@ -175,7 +175,7 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Tamanho dos nós")
+			.setName("Node size")
 			.addSlider((sl) =>
 				sl
 					.setLimits(0.4, 3, 0.1)
@@ -188,8 +188,8 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Rótulos dos hubs")
-			.setDesc("Mostra sempre o nome das 10 notas mais conectadas.")
+			.setName("Hub labels")
+			.setDesc("Always show the names of the 10 most connected notes.")
 			.addToggle((t) =>
 				t.setValue(s.hubLabels).onChange((v) => {
 					s.hubLabels = v;
@@ -198,10 +198,10 @@ export class BrainGraphSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Recalcular layout")
+			.setName("Recalculate layout")
 			.setDesc(
-				"As posições das notas ficam salvas para o cérebro abrir sempre igual. Use isto para distribuir tudo de novo do zero.",
+				"Note positions are saved so the brain always opens the same way. Use this to lay everything out again from scratch.",
 			)
-			.addButton((b) => b.setButtonText("Recalcular").onClick(() => this.plugin.relayout()));
+			.addButton((b) => b.setButtonText("Recalculate").onClick(() => this.plugin.relayout()));
 	}
 }

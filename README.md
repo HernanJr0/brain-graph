@@ -1,118 +1,134 @@
 # Brain Graph
 
-Plugin do Obsidian que desenha o vault como um cérebro, em 2D ou 3D. É uma alternativa leve ao graph view nativo.
+An Obsidian plugin that draws your vault as a brain, in 2D or 3D. It's a lightweight alternative to the core graph view.
 
-- **Neurônios:** cada nota é um ponto no córtex. As 10 notas mais conectadas sempre mostram o nome.
-- **Regiões:** cada comunidade de notas (detectada pelos links) ou cada pasta de primeiro nível vira uma região do córtex. Grupos muito ligados entre si ficam vizinhos.
-- **Órfãs:** notas sem links ficam no cerebelo.
-- **Fibras:** os links. Com a superfície desligada (padrão), mergulham para o centro como substância branca. Com a superfície ligada, passam por fora em arco.
-- **Mapa estável:** as posições ficam salvas, então o cérebro abre sempre igual. Notas novas entram perto das vizinhas sem bagunçar o resto.
+![Brain Graph showing a vault as a 3D brain](./images/brain-graph.webp)
 
-## Instalação
+- **Neurons:** each note is a point on the cortex. The 10 most connected notes always show their names.
+- **Regions:** each community of notes (detected from links) or each top-level folder becomes a region of the cortex. Tightly connected groups sit next to each other.
+- **Orphans:** notes without links live in the cerebellum.
+- **Fibers:** the links. With the surface off (default), they dive toward the center like white matter. With the surface on, they arch over the outside.
+- **Stable map:** positions are saved, so the brain always opens the same way. New notes land near their neighbors without shuffling the rest.
 
-1. Baixe o `brain-graph-X.Y.Z.zip` do [release mais recente](https://github.com/HernanJr0/brain-graph/releases/latest).
-2. Extraia em `<vault>/.obsidian/plugins/`. O resultado deve ser `.obsidian/plugins/brain-graph/`, com `main.js`, `manifest.json` e `styles.css`.
-3. Em *Configurações → Plugins da comunidade*, recarregue a lista e ative **Brain Graph**.
-4. Abra pelo ícone 🧠 na barra lateral ou com Ctrl/Cmd+P → "Abrir Brain Graph".
+![Idle animation with pulses running along the links](./images/brain-graph-idle.webp)
 
-Na primeira abertura, o plugin calcula o layout (leva alguns segundos, conforme o tamanho do vault) e grava `layout.json` na pasta do plugin. As aberturas seguintes já vêm prontas.
+## Installation
 
-Para atualizar, substitua os arquivos e **reinicie o Obsidian**. Desligar e religar o plugin com a versão nova pode falhar ao carregar.
+### From Community plugins
 
-## Uso
+1. Open *Settings → Community plugins → Browse* and search for **Brain Graph**.
+2. Select **Install**, then **Enable**.
 
-- **Navegar:** arrastar orbita (3D) ou move (2D) a câmera, e a roda dá zoom. Clicar numa nota abre a nota.
-- **Barra do grafo:** alterna 2D/3D, liga e desliga córtex, superfície, profundidade de campo, brilho e pulsos ambientes, e tem uma busca por nome.
-- **Comandos:** "Abrir Brain Graph", "Recalcular layout do cérebro" e "Alternar 2D/3D".
+### Manual
 
-### Configurações
+1. Download `brain-graph-X.Y.Z.zip` from the [latest release](https://github.com/HernanJr0/brain-graph/releases/latest).
+2. Extract it into `<vault>/.obsidian/plugins/`. You should end up with `.obsidian/plugins/brain-graph/` containing `main.js`, `manifest.json` and `styles.css`.
+3. In *Settings → Community plugins*, reload the list and enable **Brain Graph**.
 
-| Opção | Padrão | O que faz |
+Open it from the brain icon in the ribbon or with Ctrl/Cmd+P → "Brain Graph: Open graph view".
+
+On first open, the plugin computes the layout (a few seconds, depending on vault size) and writes `layout.json` to the plugin folder. Later opens are instant.
+
+When updating manually, replace the files and **restart Obsidian**. Toggling the plugin off and on with the new version may fail to load.
+
+## Usage
+
+- **Navigate:** drag to orbit (3D) or pan (2D), scroll to zoom. Click a note to open it; Ctrl/Cmd+click opens it in a new tab.
+- **Graph toolbar:** switches 2D/3D, jumps to side, top and front views, toggles cortex, surface, depth of field, glow and ambient pulses, and has a search by note name.
+- **Commands:** "Open graph view", "Recalculate layout" and "Toggle 2D/3D".
+
+### Settings
+
+| Option | Default | What it does |
 | --- | --- | --- |
-| Modo padrão | 3D | Como o grafo abre |
-| Agrupar regiões por | Links | Comunidades por links ou pasta de primeiro nível |
-| Mostrar notas órfãs | ligado | Notas sem links no cerebelo |
-| Superfície do cérebro | desligado | Superfície escura com as notas por fora, em vez da nuvem de pontos |
-| Profundidade de campo | ligado | Desfoca e esmaece o que está atrás do centro |
-| Mostrar córtex | ligado | Contorno anatômico: fissuras, sulcos, lobos, cerebelo e medula |
-| Brilho dos nós | ligado | Halo em volta das notas |
-| Pulsos no hover | ligado | Sinais correm pelos links da nota sob o mouse |
-| Pulsos ambientes | ligado (45) | Sinais lentos o tempo todo |
-| Tela de descanso | ligado | Depois de cerca de 1,5 s parado: onda de atividade, brilho respirando e a interface some |
-| Órbita na tela de descanso | ligado | A câmera gira devagar em repouso (3D) |
-| Tamanho dos nós / Rótulos dos hubs | 1 / ligado | Aparência |
-| Recalcular layout | — | Distribui tudo de novo do zero |
+| Default mode | 3D | How the graph opens |
+| Group regions by | Links | Link communities or top-level folder |
+| Show orphan notes | on | Notes without links in the cerebellum |
+| Brain surface | off | Dark surface with notes on the outside, instead of the point cloud |
+| Depth of field | on | Blurs and dims what is behind the center |
+| Show cortex | on | Anatomical outline: fissures, sulci, lobes, cerebellum and brainstem |
+| Node glow | on | Halo around notes |
+| Hover pulses | on | Signals run along the links of the hovered note |
+| Ambient pulses | on (45) | Slow signals all the time |
+| Idle animation | on | After about 1.5 s without input: a wave of activity, breathing glow, and the interface fades out |
+| Idle orbit | on | The camera slowly orbits while idle (3D) |
+| Node size / Hub labels | 1 / on | Appearance |
+| Recalculate layout | — | Lays everything out again from scratch |
 
-## Desempenho
+## Performance
 
-O plugin foi feito para rodar a 20 fps ou mais em GPU integrada.
+The plugin is built to run at 20 fps or more on integrated GPUs.
 
-- **Renderização sob demanda:** só redesenha quando algo muda. Para custo zero com o cérebro parado, desligue os **pulsos ambientes** e a **tela de descanso**. Com qualquer um dos dois ligado, o loop roda a cerca de 30 fps.
-- **Pausa automática:** o render para quando a aba fica oculta.
-- **Layout finito:** o layout converge e para, com repulsão O(n) por spatial hash. O resultado fica em `layout.json`.
-- **LOD:** a profundidade de campo reduz o detalhe do que está ao fundo.
+- **On-demand rendering:** it only redraws when something changes. For zero cost while the brain is still, turn off **ambient pulses** and **idle animation**. With either one on, the loop runs at about 30 fps.
+- **Auto pause:** rendering stops when the tab is hidden.
+- **Finite layout:** the layout converges and stops, with O(n) repulsion via a spatial hash. The result is stored in `layout.json`.
+- **LOD:** depth of field reduces detail in the background.
 
-## Desenvolvimento
+## Privacy
 
-Requer Node.js 22 e npm.
+Brain Graph works fully offline. It reads your notes' links through Obsidian's metadata cache, makes no network requests, and only writes `data.json` (settings) and `layout.json` (positions) inside its own plugin folder.
+
+## Development
+
+Requires Node.js 22 and npm.
 
 ```bash
 npm install
-npm run dev      # watch → main.js com sourcemap
-npm run build    # type-check (tsc) + build minificado
-npm run deploy   # build + copia para um vault de teste
+npm run dev      # watch → main.js with sourcemap
+npm run build    # type-check (tsc) + minified build
+npm run deploy   # build + copy to a test vault
 ```
 
-O `deploy` usa o caminho passado como argumento, ou a variável `BRAIN_GRAPH_VAULT`, ou `~/Documents/BrainGraph-Teste`. Para um caminho com espaço, chame `node dev/deploy.mjs "<vault>"` direto.
+`deploy` uses the path given as an argument, or the `BRAIN_GRAPH_VAULT` variable, or `~/Documents/BrainGraph-Teste`. For a path with spaces, call `node dev/deploy.mjs "<vault>"` directly.
 
-### Preview fora do Obsidian
+### Preview outside Obsidian
 
-`dev/preview.ts` renderiza o cérebro com um vault falso no navegador:
+`dev/preview.ts` renders the brain with a fake vault in the browser:
 
 ```bash
 npx esbuild dev/preview.ts --bundle --format=iife --outfile=dev/preview.js
-python -m http.server 5178   # abra http://localhost:5178/dev/index.html
+python -m http.server 5178   # open http://localhost:5178/dev/index.html
 ```
 
-Parâmetros de URL:
-- `n`: número de notas (padrão 1500).
-- `clusters`: número de grupos.
-- `orphans`: fração de notas órfãs.
+URL parameters:
+- `n`: number of notes (default 1500).
+- `clusters`: number of groups.
+- `orphans`: fraction of orphan notes.
 - `mode=2d`.
 - `view=superior|frontal`.
-- `cloud`: sem superfície.
-- Efeitos para desligar: `nodof`, `noglow`, `noambient`, `noidle`.
+- `cloud`: no surface.
+- Effects to turn off: `nodof`, `noglow`, `noambient`, `noidle`.
 
-### Scripts de medição
+### Measurement scripts
 
-Empacote com `npx esbuild dev/<script>.ts --bundle --platform=node --outfile=dev/<script>.js` e rode com `node`:
+Bundle with `npx esbuild dev/<script>.ts --bundle --platform=node --outfile=dev/<script>.js` and run with `node`:
 
-- `dev/bench.ts`: tempo de grafo e layout com 1,5k, 8k e 20k notas sintéticas.
-- `dev/quality.ts [vault]`: num vault real, mede comprimento dos links, reabertura, nota nova e distribuição por lobo.
-- `dev/affinity.ts`: verifica se comunidades ligadas entre si ficam vizinhas.
+- `dev/bench.ts`: graph and layout time with 1.5k, 8k and 20k synthetic notes.
+- `dev/quality.ts [vault]`: on a real vault, measures link length, reopening, new notes and distribution per lobe.
+- `dev/affinity.ts`: checks that connected communities end up as neighbors.
 
-### Estrutura
+### Structure
 
-| Arquivo | Papel |
+| File | Role |
 | --- | --- |
-| `src/main.ts` | Plugin: view, comandos, configurações e persistência em `layout.json` |
-| `src/view.ts` | ItemView: barra de ferramentas, busca, abrir nota, rebuild incremental |
-| `src/graph-core.ts` | Grafo a partir dos links resolvidos, com comunidades por propagação de rótulos |
-| `src/layout.ts` | Sementes por afinidade, vagas no córtex por área, forças com spatial hash e projeção na anatomia |
-| `src/brain-shape.ts` | Anatomia procedural por SDF: hemisférios, sulcos, cerebelo e medula estilizados |
-| `src/renderer.ts` | Three.js: nós, halos, fibras, pulsos, superfície, profundidade de campo, tela de descanso e picking |
-| `src/settings.ts` | Configurações |
+| `src/main.ts` | Plugin: view, commands, settings and persistence in `layout.json` |
+| `src/view.ts` | ItemView: toolbar, search, opening notes, incremental rebuild |
+| `src/graph-core.ts` | Graph from resolved links, with communities via label propagation |
+| `src/layout.ts` | Affinity-based seeds, cortex slots by area, spatial-hash forces and projection onto the anatomy |
+| `src/brain-shape.ts` | Procedural SDF anatomy: stylized hemispheres, sulci, cerebellum and brainstem |
+| `src/renderer.ts` | Three.js: nodes, halos, fibers, pulses, surface, depth of field, idle animation and picking |
+| `src/settings.ts` | Settings |
 
 ### Release
 
-Os releases são publicados pelo GitHub Actions (`.github/workflows/release.yml`):
+Releases are published by GitHub Actions (`.github/workflows/release.yml`):
 
-1. Atualize `version` no `manifest.json` e no `package.json` e acrescente a versão em `versions.json`.
-2. Faça o commit, crie a tag anotada e envie: `git tag -a v0.1.7 -m "Brain Graph 0.1.7" && git push origin main v0.1.7`.
-3. O workflow confere se a tag bate com o `manifest.json`, faz o build e publica `main.js`, `manifest.json`, `styles.css` e `brain-graph-X.Y.Z.zip`.
+1. Update `version` in `manifest.json` and `package.json`, and add the version to `versions.json`.
+2. Commit, create an annotated tag **without a `v` prefix** (Obsidian requires the tag to match the manifest version exactly) and push: `git tag -a 1.0.1 -m "Brain Graph 1.0.1" && git push origin main 1.0.1`.
+3. The workflow checks that the tag matches `manifest.json`, builds, and publishes `main.js`, `manifest.json`, `styles.css` and `brain-graph-X.Y.Z.zip`.
 
-Para republicar uma tag existente, use *Actions → Release → Run workflow* e informe a tag.
+To republish an existing tag, use *Actions → Release → Run workflow* and enter the tag.
 
-## Licença
+## License
 
 [MIT](LICENSE)

@@ -1,6 +1,6 @@
 name: Release
 
-# Publica um release a cada tag de versão (v0.1.7 ou 0.1.7).
+# Publica um release a cada tag de versão (ex.: 1.0.1). O Obsidian exige a tag igual ao manifest, sem "v".
 # Para (re)publicar uma tag antiga: Actions → Release → Run workflow → informe a tag.
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag a publicar (ex.: v0.1.6)"
+        description: "Tag a publicar (ex.: 1.0.0)"
         required: true
 
 permissions:

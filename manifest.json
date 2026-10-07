@@ -1,9 +1,10 @@
 {
   "id": "brain-graph",
   "name": "Brain Graph",
-  "version": "0.1.6",
+  "version": "1.0.0",
   "minAppVersion": "1.5.0",
-  "description": "Graph view leve em 2D/3D com formato de cérebro.",
+  "description": "Visualize your vault as a lightweight 2D/3D graph shaped like a brain.",
   "author": "Hernan",
+  "authorUrl": "https://github.com/HernanJr0",
   "isDesktopOnly": false
 }
