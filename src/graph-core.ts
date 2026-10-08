@@ -84,7 +84,7 @@ export function buildGraphCore(
 	const raw =
 		opts.groupBy === "folder"
 			? folderLabels(ids)
-			: labelPropagation(n, neighbors);
+			: mergeCommunities(labelPropagation(n, neighbors, canonicalOrder(ids)), edges, degree);
 
 	// Compacta rótulos por tamanho (maior região = 0); órfãos ficam em -1.
 	const sizes = new Map<number, number>();
@@ -101,23 +101,33 @@ export function buildGraphCore(
 	return { ids, names, edges, degree, neighbors, nodeEdges, group, groupCount: order.length, source };
 }
 
-function folderLabels(ids: string[]): Int32Array {
-	const byFolder = new Map<string, number>();
-	const out = new Int32Array(ids.length);
-	ids.forEach((p, i) => {
-		const slash = p.indexOf("/");
-		const top = slash === -1 ? "" : p.slice(0, slash);
-		if (!byFolder.has(top)) byFolder.set(top, byFolder.size);
-		out[i] = byFolder.get(top)!;
-	});
-	return out;
+/**
+ * Índices dos nós em ordem alfabética de caminho. O Obsidian não garante a ordem de
+ * getMarkdownFiles() entre sessões; o agrupamento usa esta ordem para dar sempre o mesmo resultado.
+ */
+function canonicalOrder(ids: string[]): number[] {
+	return Array.from(ids.keys()).sort((a, b) => (ids[a] < ids[b] ? -1 : ids[a] > ids[b] ? 1 : 0));
 }
 
-/** Detecção de comunidades por propagação de rótulos (barata e determinística). */
-function labelPropagation(n: number, neighbors: number[][]): Int32Array {
+function folderLabels(ids: string[]): Int32Array {
+	const top = ids.map((p) => {
+		const slash = p.indexOf("/");
+		return slash === -1 ? "" : p.slice(0, slash);
+	});
+	// Rótulo = posição da pasta em ordem alfabética: empates de tamanho não dependem da ordem dos arquivos.
+	const folders = [...new Set(top)].sort();
+	const byFolder = new Map(folders.map((f, k) => [f, k]));
+	return Int32Array.from(top, (f) => byFolder.get(f)!);
+}
+
+/**
+ * Detecção de comunidades por propagação de rótulos (barata e determinística).
+ * Rótulos iniciais e ordem de visita vêm de `canonical`: o resultado não depende da ordem dos arquivos.
+ */
+function labelPropagation(n: number, neighbors: number[][], canonical: number[]): Int32Array {
 	const label = new Int32Array(n);
-	for (let i = 0; i < n; i++) label[i] = i;
-	const order = Array.from({ length: n }, (_, i) => i);
+	canonical.forEach((node, rank) => (label[node] = rank));
+	const order = [...canonical];
 	const rng = mulberry32(1337);
 	const counts = new Map<number, number>();
 	for (let it = 0; it < 30; it++) {
@@ -149,4 +159,76 @@ function labelPropagation(n: number, neighbors: number[][]): Int32Array {
 		if (changed === 0) break;
 	}
 	return label;
+}
+
+/**
+ * A propagação de rótulos tende a partir comunidades grandes em pedaços muito ligados entre si.
+ * Junta pares de comunidades enquanto a modularidade sobe (mesma ideia do 2º passo do Louvain):
+ * pedaços da mesma comunidade se reúnem, comunidades de fato separadas continuam separadas.
+ * Determinístico: empates de ganho ficam com o par de menores rótulos.
+ */
+function mergeCommunities(label: Int32Array, edges: Uint32Array, degree: Uint32Array): Int32Array {
+	const m = edges.length / 2;
+	if (m === 0) return label;
+	// Grau total de cada comunidade e links entre pares de comunidades (chave "a,b" com a < b).
+	const deg = new Map<number, number>();
+	for (let i = 0; i < label.length; i++) {
+		if (degree[i] > 0) deg.set(label[i], (deg.get(label[i]) ?? 0) + degree[i]);
+	}
+	const between = new Map<number, Map<number, number>>();
+	const link = (a: number, b: number, w: number) => {
+		let row = between.get(a);
+		if (!row) between.set(a, (row = new Map()));
+		row.set(b, (row.get(b) ?? 0) + w);
+	};
+	for (let e = 0; e < m; e++) {
+		const a = label[edges[e * 2]];
+		const b = label[edges[e * 2 + 1]];
+		if (a === b) continue;
+		link(a, b, 1);
+		link(b, a, 1);
+	}
+	const parent = new Map<number, number>();
+	const twoM = 2 * m;
+	for (;;) {
+		// ΔQ de juntar A e B = e_AB/m − 2·(d_A/2m)·(d_B/2m).
+		let bestGain = 0;
+		let bestA = -1;
+		let bestB = -1;
+		for (const [a, row] of between) {
+			const da = deg.get(a)!;
+			for (const [b, w] of row) {
+				if (b <= a) continue;
+				const gain = w / m - (2 * da * deg.get(b)!) / (twoM * twoM);
+				if (gain > bestGain + 1e-12 || (Math.abs(gain - bestGain) <= 1e-12 && bestA >= 0 && (a < bestA || (a === bestA && b < bestB)))) {
+					bestGain = gain;
+					bestA = a;
+					bestB = b;
+				}
+			}
+		}
+		if (bestA < 0) break;
+		// B entra em A: soma graus e links, redireciona os vizinhos de B.
+		deg.set(bestA, deg.get(bestA)! + deg.get(bestB)!);
+		deg.delete(bestB);
+		const rowB = between.get(bestB)!;
+		between.delete(bestB);
+		const rowA = between.get(bestA)!;
+		rowA.delete(bestB);
+		for (const [c, w] of rowB) {
+			if (c === bestA) continue;
+			rowA.set(c, (rowA.get(c) ?? 0) + w);
+			const rowC = between.get(c)!;
+			rowC.delete(bestB);
+			rowC.set(bestA, (rowC.get(bestA) ?? 0) + w);
+		}
+		parent.set(bestB, bestA);
+	}
+	if (parent.size === 0) return label;
+	const root = (l: number): number => {
+		let r = l;
+		while (parent.has(r)) r = parent.get(r)!;
+		return r;
+	};
+	return Int32Array.from(label, root);
 }

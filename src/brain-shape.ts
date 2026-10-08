@@ -3,7 +3,7 @@
 // Escala: 1 unidade ≈ 83 mm. Proporções de um cérebro adulto médio:
 // comprimento ~167 mm (2.0 u), largura ~140 mm (1.68 u), altura do cérebro ~93 mm.
 
-type Vec3 = [number, number, number];
+export type Vec3 = [number, number, number];
 
 interface Ellipsoid {
 	c: Vec3;
@@ -22,12 +22,6 @@ const LOBE_SHAPES: Record<Lobe, Ellipsoid> = {
 	occipital: { c: [0.36, 0.02, -0.62], r: [0.33, 0.34, 0.4] },
 	// Inclinado: a fissura lateral (Sylvius) sobe em direção à parte de trás.
 	temporal: { c: [0.5, -0.22, 0.0], r: [0.34, 0.25, 0.55], pitch: 0.22 },
-};
-const LOBE_TINT: Record<Lobe, Vec3> = {
-	frontal: [0.34, 0.44, 0.78],
-	parietal: [0.3, 0.6, 0.66],
-	occipital: [0.42, 0.58, 0.46],
-	temporal: [0.56, 0.44, 0.72],
 };
 
 /** Meia-largura da fissura longitudinal. */
@@ -188,10 +182,10 @@ class RadialSurface {
 	 * Malha da superfície: a própria grade (theta, phi) da tabela vira os vértices.
 	 * `mirror` espelha em x (hemisfério esquerdo a partir do direito).
 	 */
-	mesh(color: (x: number, y: number, z: number) => Vec3, mirror = false): SurfaceMesh {
+	mesh(part: AnatomyPart, lobed = false, mirror = false): SurfaceMesh {
 		const { nTheta, nPhi, radii, center } = this;
 		const positions = new Float32Array(nTheta * nPhi * 3);
-		const colors = new Float32Array(nTheta * nPhi * 3);
+		const lobe = lobed ? new Uint8Array(nTheta * nPhi) : undefined;
 		for (let i = 0; i < nTheta; i++) {
 			const theta = (i / (nTheta - 1)) * Math.PI;
 			const st = Math.sin(theta);
@@ -204,7 +198,7 @@ class RadialSurface {
 				positions[o] = mirror ? -x : x;
 				positions[o + 1] = center[1] + dy * r;
 				positions[o + 2] = center[2] + st * Math.sin(phi) * r;
-				colors.set(color(positions[o], positions[o + 1], positions[o + 2]), o);
+				if (lobe) lobe[i * nPhi + j] = LOBES.indexOf(lobeAt(positions[o], positions[o + 1], positions[o + 2]));
 			}
 		}
 		const indices = new Uint32Array((nTheta - 1) * nPhi * 6);
@@ -223,7 +217,7 @@ class RadialSurface {
 				indices[w++] = d;
 			}
 		}
-		return { positions, colors, indices };
+		return { part, positions, indices, lobe };
 	}
 
 	/** Raio da superfície na direção unitária (dx,dy,dz). */
@@ -243,10 +237,17 @@ class RadialSurface {
 	}
 }
 
+export type AnatomyPart = "cortex" | "cerebellum" | "spine";
+
+/** Malha sem cor: o tema pinta a partir da parte, do lobo e do esmaecimento de cada vértice. */
 export interface SurfaceMesh {
+	part: AnatomyPart;
 	positions: Float32Array;
-	colors: Float32Array;
 	indices: Uint32Array;
+	/** Córtex: índice em LOBES de cada vértice. */
+	lobe?: Uint8Array;
+	/** Medula: escurece em direção à ponta (1 = cor cheia). */
+	fade?: Float64Array;
 }
 
 let cache: { hemi: RadialSurface; cereb: RadialSurface } | undefined;
@@ -263,7 +264,7 @@ let areaTable: { tris: Float32Array; cum: Float64Array; total: number } | undefi
 /** Triângulos da face visível do córtex (sem face medial e base) com a área acumulada. */
 function cortexAreaTable() {
 	if (areaTable) return areaTable;
-	const { positions: pos, indices: idx } = surfaces().hemi.mesh(() => [0, 0, 0]);
+	const { positions: pos, indices: idx } = surfaces().hemi.mesh("cortex");
 	const tris: number[] = [];
 	const cum: number[] = [];
 	let total = 0;
@@ -370,11 +371,11 @@ function spineFrame(t: number, c: number[], n: number[], b: number[]): void {
 	b[0] /= bl; b[1] /= bl; b[2] /= bl;
 }
 
-function spineMesh(color: Vec3): SurfaceMesh {
+function spineMesh(): SurfaceMesh {
 	const RINGS = 28;
 	const SIDES = 14;
 	const positions = new Float32Array(RINGS * SIDES * 3);
-	const colors = new Float32Array(RINGS * SIDES * 3);
+	const fade = new Float64Array(RINGS * SIDES);
 	const c = [0, 0, 0], n = [0, 0, 0], b = [0, 0, 0];
 	for (let i = 0; i < RINGS; i++) {
 		const t = i / (RINGS - 1);
@@ -385,10 +386,7 @@ function spineMesh(color: Vec3): SurfaceMesh {
 			const o = (i * SIDES + j) * 3;
 			for (let k = 0; k < 3; k++) positions[o + k] = c[k] + (n[k] * Math.cos(a) + b[k] * Math.sin(a)) * r;
 			// escurece em direção à ponta: a medula "some" no fundo
-			const fade = 1 - t * 0.45;
-			colors[o] = color[0] * fade;
-			colors[o + 1] = color[1] * fade;
-			colors[o + 2] = color[2] * fade;
+			fade[i * SIDES + j] = 1 - t * 0.45;
 		}
 	}
 	const indices = new Uint32Array((RINGS - 1) * SIDES * 6);
@@ -404,22 +402,13 @@ function spineMesh(color: Vec3): SurfaceMesh {
 			indices[w++] = p + SIDES;
 			indices[w++] = q + SIDES;
 		}
-	return { positions, colors, indices };
+	return { part: "spine", positions, indices, fade };
 }
 
 /** Malhas sólidas da anatomia: 2 hemisférios, cerebelo e medula. */
 export function anatomyMeshes(): SurfaceMesh[] {
 	const { hemi, cereb } = surfaces();
-	const cortex = (x: number, y: number, z: number): Vec3 => {
-		const t = LOBE_TINT[lobeAt(x, y, z)];
-		return [0.035 + t[0] * 0.13, 0.04 + t[1] * 0.13, 0.06 + t[2] * 0.13];
-	};
-	return [
-		hemi.mesh(cortex, false),
-		hemi.mesh(cortex, true),
-		cereb.mesh(() => [0.085, 0.1, 0.16]),
-		spineMesh([0.075, 0.088, 0.14]),
-	];
+	return [hemi.mesh("cortex", true, false), hemi.mesh("cortex", true, true), cereb.mesh("cerebellum"), spineMesh()];
 }
 
 /** Raio do córtex na direção unitária d a partir do centro do hemisfério h (±1). */
@@ -506,9 +495,23 @@ function gyri(x: number, y: number, z: number): number {
 	);
 }
 
+export enum ShellKind {
+	/** Fissuras e sulcos principais (fronteiras entre lobos). */
+	Boundary,
+	/** Sulcos secundários, tingidos pelo lobo. */
+	Sulcus,
+	Cerebellum,
+	Spine,
+}
+
+/** Pontos da anatomia sem cor: o tema pinta a partir do tipo, do lobo e do esmaecimento. */
 export interface Shell {
 	positions: Float32Array;
-	colors: Float32Array;
+	kind: Uint8Array;
+	/** Sulcos: índice em LOBES. */
+	lobe: Uint8Array;
+	/** Medula: escurece em direção à ponta (1 = cor cheia). */
+	fade: Float64Array;
 }
 
 /**
@@ -518,7 +521,9 @@ export interface Shell {
 export function sampleShell(rng: Rng): Shell {
 	const { cereb } = surfaces();
 	const pts: number[] = [];
-	const cols: number[] = [];
+	const kinds: number[] = [];
+	const lobes: number[] = [];
+	const fades: number[] = [];
 	const d = [0, 0, 0];
 	const p = [0, 0, 0];
 
@@ -533,13 +538,9 @@ export function sampleShell(rng: Rng): Shell {
 		const sulcus = Math.abs(gyri(p[0], p[1], p[2])) < 0.07;
 		if (!boundary && !sulcus) continue;
 		pts.push(p[0], p[1], p[2]);
-		if (boundary) {
-			cols.push(0.72, 0.78, 0.92);
-		} else {
-			const t = LOBE_TINT[lobeAt(p[0], p[1], p[2])];
-			const k = sulcus ? 0.62 : 0.4;
-			cols.push(t[0] * k, t[1] * k, t[2] * k);
-		}
+		kinds.push(boundary ? ShellKind.Boundary : ShellKind.Sulcus);
+		lobes.push(boundary ? 0 : LOBES.indexOf(lobeAt(p[0], p[1], p[2])));
+		fades.push(1);
 		got++;
 	}
 
@@ -553,7 +554,9 @@ export function sampleShell(rng: Rng): Shell {
 		const z = cc[2] + d[2] * R;
 		if (Math.abs(Math.sin(y * 95 + 2.5 * Math.sin(x * 3.5))) > 0.3) continue;
 		pts.push(x, y, z);
-		cols.push(0.36, 0.42, 0.68);
+		kinds.push(ShellKind.Cerebellum);
+		lobes.push(0);
+		fades.push(1);
 		n++;
 	}
 
@@ -570,9 +573,15 @@ export function sampleShell(rng: Rng): Shell {
 		const z = sc[2] + (sn[2] * Math.cos(a) + sb[2] * Math.sin(a)) * r;
 		if (sdHemisphere(x, y, z) < 0 || sdCerebellum(x, y, z) < 0) continue; // parte escondida no cérebro
 		pts.push(x, y, z);
-		const f = 1 - t * 0.5;
-		cols.push(0.3 * f, 0.36 * f, 0.6 * f);
+		kinds.push(ShellKind.Spine);
+		lobes.push(0);
+		fades.push(1 - t * 0.5);
 	}
 
-	return { positions: new Float32Array(pts), colors: new Float32Array(cols) };
+	return {
+		positions: new Float32Array(pts),
+		kind: new Uint8Array(kinds),
+		lobe: new Uint8Array(lobes),
+		fade: new Float64Array(fades),
+	};
 }

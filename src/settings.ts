@@ -2,8 +2,11 @@ import { App, PluginSettingTab, Setting, type SettingDefinitionItem } from "obsi
 import type BrainGraphPlugin from "./main";
 import type { GroupBy } from "./graph-core";
 import type { RenderOptions } from "./renderer";
+import type { Appearance } from "./theme";
 
 export interface BrainGraphSettings extends RenderOptions {
+	/** Tema do grafo: segue o Obsidian ou fixo em claro/escuro. */
+	appearance: Appearance;
 	groupBy: GroupBy;
 	showOrphans: boolean;
 	/** Versão do formato das configurações, para migrar padrões antigos. */
@@ -24,6 +27,7 @@ export const DEFAULT_SETTINGS: BrainGraphSettings = {
 	dof: true,
 	idleOrbit: true,
 	settingsVersion: 2,
+	appearance: "auto",
 	groupBy: "links",
 	showOrphans: true,
 };
@@ -52,6 +56,12 @@ const DEFS: Def[] = [
 		name: "Default mode",
 		desc: "How the graph opens. You can also switch from the graph toolbar.",
 		control: { type: "dropdown", options: { "3d": "3D (orbit)", "2d": "2D (flat view)" } },
+	},
+	{
+		key: "appearance",
+		name: "Appearance",
+		desc: "Follow Obsidian switches between light and dark together with your theme.",
+		control: { type: "dropdown", options: { auto: "Follow Obsidian", dark: "Dark", light: "Light" } },
 	},
 	{
 		key: "groupBy",

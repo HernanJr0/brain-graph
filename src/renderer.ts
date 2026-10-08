@@ -27,9 +27,12 @@ import {
 	cortexRadius,
 	mulberry32,
 	sampleShell,
+	type Shell,
+	type SurfaceMesh,
 } from "./brain-shape";
 import type { GraphCore } from "./graph-core";
 import { BrainLayout, type SavedPosition } from "./layout";
+import { darkTheme, groupColor, meshColors, shellColors, type BrainTheme } from "./theme";
 
 export type ViewMode = "3d" | "2d";
 export type ViewPreset = "lateral" | "superior" | "frontal";
@@ -87,12 +90,6 @@ const PRESETS: Record<ViewPreset, [number, number, number]> = {
 };
 const CAMERA_DISTANCE = 3.5;
 const ORTHO_HALF_HEIGHT = 1.15;
-const BG = new Color("#070a12");
-const PALETTE = [
-	"#5eead4", "#a78bfa", "#f472b6", "#60a5fa", "#fbbf24", "#34d399",
-	"#fb7185", "#38bdf8", "#c084fc", "#f59e0b", "#4ade80", "#e879f9",
-];
-const ORPHAN_COLOR = new Color("#8391b0");
 /** Segmentos por aresta: links longos curvam para o centro (substância branca). */
 const EDGE_SEGMENTS = 6;
 /** Centro usado para arcos entre hemisférios (passam por cima da fissura). */
@@ -126,12 +123,13 @@ void main() {
 const SURFACE_FRAG = /* glsl */ `
 uniform float uOpacity;
 uniform float uRim;
+uniform vec3 uRimColor;
 varying vec3 vNormal;
 varying vec3 vView;
 varying vec3 vColor;
 void main() {
 	float ndv = abs(dot(normalize(vNormal), normalize(vView)));
-	vec3 c = vColor * (0.45 + 0.8 * ndv) + vec3(0.2, 0.28, 0.46) * pow(1.0 - ndv, 2.5) * 0.5 * uRim;
+	vec3 c = vColor * (0.45 + 0.8 * ndv) + uRimColor * pow(1.0 - ndv, 2.5) * 0.5 * uRim;
 	gl_FragColor = vec4(c, uOpacity);
 }`;
 
@@ -170,6 +168,7 @@ attribute vec3 aColor;
 attribute float aSize;
 attribute float aHighlight;
 attribute float aFlash;
+attribute float aAlpha;
 uniform float uScale;
 uniform float uPixelRatio;
 uniform float uOrtho;
@@ -185,9 +184,11 @@ uniform float uDofNear;
 uniform float uDofFar;
 uniform float uLodCull;
 uniform vec3 uBg;
+uniform vec3 uFlash;
 varying vec3 vColor;
 varying float vDim;
 varying float vBlur;
+varying float vAlpha;
 void main() {
 	vec4 mv = modelViewMatrix * vec4(position, 1.0);
 	gl_Position = projectionMatrix * mv;
@@ -204,11 +205,13 @@ void main() {
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 	}
 	vDim = uFocus * (1.0 - step(0.5, aHighlight));
-	vColor = mix(mix(aColor, uBg, vDim * 0.8), vec3(0.75, 0.92, 1.0), clamp(wave * 0.55 + aFlash * 0.6, 0.0, 1.0));
+	vAlpha = aAlpha;
+	vColor = mix(mix(aColor, uBg, vDim * 0.8), uFlash, clamp(wave * 0.55 + aFlash * 0.6, 0.0, 1.0));
 }`;
 
 const FRAG = /* glsl */ `
 uniform vec3 uBg;
+uniform float uRing;
 varying vec3 vColor;
 varying float vBlur;
 void main() {
@@ -218,22 +221,27 @@ void main() {
 	float edge = mix(0.12, 0.3, vBlur);
 	float a = 1.0 - smoothstep(1.0 - edge, 1.0, r);
 	if (a < 0.03) discard;
-	vec3 col = (r > 0.75 && vBlur < 0.35) ? vColor * 0.6 : vColor;
+	vec3 col = (r > 0.75 && vBlur < 0.35) ? vColor * uRing : vColor;
 	col = mix(col, uBg, vBlur * 0.6);
 	gl_FragColor = vec4(col, a * mix(1.0, 0.32, vBlur));
 }`;
 
-/** Halo: queda suave do centro para a borda, somado à cena (aditivo). Some quando o nó está fora de foco. */
+/**
+ * Halo: queda suave do centro para a borda. Some quando o nó está fora de foco.
+ * No escuro é somado à cena (aditivo); no claro é uma aura translúcida e os pulsos esmaecem pela transparência.
+ */
 const HALO_FRAG = /* glsl */ `
 uniform float uIntensity;
 uniform float uBreath;
+uniform float uGain;
 varying vec3 vColor;
 varying float vDim;
 varying float vBlur;
+varying float vAlpha;
 void main() {
 	float d = length(gl_PointCoord - 0.5) * 2.0;
 	if (d > 1.0) discard;
-	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 + uBreath) * (1.0 - vDim * 0.85) * (1.0 - vBlur);
+	float a = (1.0 - d) * (1.0 - d) * uIntensity * (1.0 + uBreath) * (1.0 - vDim * 0.85) * (1.0 - vBlur) * uGain * vAlpha;
 	gl_FragColor = vec4(vColor, a);
 }`;
 
@@ -254,7 +262,9 @@ function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 			uDofNear: { value: 3 },
 			uDofFar: { value: 4 },
 			uLodCull: { value: 0 },
-			uBg: { value: BG },
+			uBg: { value: new Color() },
+			uFlash: { value: new Color() },
+			uRing: { value: 0.6 },
 		},
 		vertexShader: VERT,
 		fragmentShader: FRAG,
@@ -279,9 +289,9 @@ function haloMaterial(): ShaderMaterial {
 	m.uniforms.uSizeScale.value = 2.3;
 	m.uniforms.uMaxSize.value = MAX_HALO_PX;
 	m.uniforms.uIntensity = { value: 0.2 };
+	m.uniforms.uGain = { value: 1 };
 	m.uniforms.uBreath = { value: 0 };
 	m.transparent = true;
-	m.blending = AdditiveBlending;
 	return m;
 }
 
@@ -292,13 +302,8 @@ function pointGeometry(positions: Float32Array, colors: Float32Array, size: Floa
 	geo.setAttribute("aSize", new BufferAttribute(size, 1));
 	geo.setAttribute("aHighlight", new BufferAttribute(new Float32Array(positions.length / 3), 1));
 	geo.setAttribute("aFlash", new BufferAttribute(new Float32Array(positions.length / 3), 1));
+	geo.setAttribute("aAlpha", new BufferAttribute(new Float32Array(positions.length / 3).fill(1), 1));
 	return geo;
-}
-
-export function groupColor(group: number): Color {
-	if (group < 0) return ORPHAN_COLOR.clone();
-	if (group < PALETTE.length) return new Color(PALETTE[group]);
-	return new Color().setHSL(((group * 137.508) % 360) / 360, 0.7, 0.62);
 }
 
 /**
@@ -315,10 +320,18 @@ export class BrainRenderer {
 	private readonly labelPool: HTMLDivElement[] = [];
 
 	private readonly shell: Points;
+	/** Anatomia sem cor (o tema pinta), guardada para repintar ao trocar de tema. */
+	private readonly shellData: Shell;
+	private readonly meshData: SurfaceMesh[] = [];
 	private readonly shellMat = pointMaterial(1, true);
 	private readonly surfaces: Mesh[] = [];
 	private readonly surfaceMat = new ShaderMaterial({
-		uniforms: { uOrtho: { value: 0 }, uOpacity: { value: SURFACE_OPACITY }, uRim: { value: 1 } },
+		uniforms: {
+			uOrtho: { value: 0 },
+			uOpacity: { value: SURFACE_OPACITY },
+			uRim: { value: 1 },
+			uRimColor: { value: new Color() },
+		},
 		vertexShader: SURFACE_VERT,
 		fragmentShader: SURFACE_FRAG,
 		side: DoubleSide,
@@ -326,7 +339,7 @@ export class BrainRenderer {
 		depthWrite: true,
 	});
 	private readonly cerebCenter = cerebellumCenter();
-	private readonly fog = new Fog(BG, 3, 4);
+	private readonly fog = new Fog(0x000000, 3, 4);
 	private readonly nodeMat = pointMaterial(2.5, true);
 	private readonly haloMat = haloMaterial();
 	private readonly edgeMat = new LineBasicMaterial({
@@ -381,6 +394,7 @@ export class BrainRenderer {
 	private readonly pulseColor = new Color();
 	private edges?: LineSegments;
 	private colors: Color[] = [];
+	private edgeColors: Color[] = [];
 	private edgeBase = new Float32Array(0);
 	private edgeCtrl = new Float32Array(0);
 	private edgeFocus = new Float32Array(0);
@@ -426,16 +440,17 @@ export class BrainRenderer {
 		private readonly container: HTMLElement,
 		private opts: RenderOptions,
 		private readonly callbacks: RendererCallbacks = {},
+		private theme: BrainTheme = darkTheme(),
 	) {
 		this.renderer = new WebGLRenderer({ antialias: false, alpha: false, stencil: false });
-		this.renderer.setClearColor(BG, 1);
+		this.applyTheme();
 		container.appendChild(this.renderer.domElement);
 
 		this.labelLayer = container.createDiv({ cls: "brain-graph-labels" });
 
-		const shell = sampleShell(mulberry32(3));
+		const shell = (this.shellData = sampleShell(mulberry32(3)));
 		const shellSize = new Float32Array(shell.positions.length / 3).fill(0.007);
-		this.shell = new Points(pointGeometry(shell.positions, shell.colors, shellSize), this.shellMat);
+		this.shell = new Points(pointGeometry(shell.positions, shellColors(shell, this.theme), shellSize), this.shellMat);
 		this.shell.frustumCulled = false;
 		this.shell.renderOrder = 0;
 		// Intensidade da onda de repouso por camada: marcos anatômicos um pouco mais que os nós.
@@ -449,12 +464,13 @@ export class BrainRenderer {
 		for (const m of anatomyMeshes()) {
 			const geo = new BufferGeometry();
 			geo.setAttribute("position", new BufferAttribute(m.positions, 3));
-			geo.setAttribute("aColor", new BufferAttribute(m.colors, 3));
+			geo.setAttribute("aColor", new BufferAttribute(meshColors(m, this.theme), 3));
 			geo.setIndex(new BufferAttribute(m.indices, 1));
 			geo.computeVertexNormals();
 			const mesh = new Mesh(geo, this.surfaceMat);
 			mesh.renderOrder = 5;
 			this.surfaces.push(mesh);
+			this.meshData.push(m);
 			this.scene.add(mesh);
 		}
 		this.scene.add(this.shell);
@@ -510,7 +526,7 @@ export class BrainRenderer {
 
 	setGraph(graph: GraphCore, prev?: Map<string, SavedPosition>): void {
 		this.graph = graph;
-		this.colors = Array.from({ length: graph.groupCount + 1 }, (_, k) => groupColor(k - 1));
+		this.setGroupColors();
 		this.layout = new BrainLayout(graph, prev);
 		this.hover = -1;
 		this.pulseCount = 0;
@@ -562,6 +578,35 @@ export class BrainRenderer {
 		this.setupPulses();
 		this.applyOptions();
 		this.refreshFocus();
+		this.requestFrame();
+	}
+
+	/** Troca as cores da cena sem refazer layout nem geometria. */
+	setTheme(theme: BrainTheme): void {
+		this.theme = theme;
+		this.applyTheme();
+		const shellAttr = this.shell.geometry.getAttribute("aColor") as BufferAttribute;
+		shellColors(this.shellData, theme, shellAttr.array as Float32Array);
+		shellAttr.needsUpdate = true;
+		this.surfaces.forEach((mesh, k) => {
+			const attr = mesh.geometry.getAttribute("aColor") as BufferAttribute;
+			meshColors(this.meshData[k], theme, attr.array as Float32Array);
+			attr.needsUpdate = true;
+		});
+		const g = this.graph;
+		if (g && this.nodes) {
+			this.setGroupColors();
+			const attr = this.nodes.geometry.getAttribute("aColor") as BufferAttribute;
+			const colors = attr.array as Float32Array;
+			for (let i = 0; i < g.ids.length; i++) this.color(g.group[i]).toArray(colors, i * 3);
+			attr.needsUpdate = true;
+			for (let e = 0; e < g.edges.length / 2; e++) {
+				this.edgeColor(g.group[g.edges[e * 2]]).toArray(this.edgeBase, e * 6);
+				this.edgeColor(g.group[g.edges[e * 2 + 1]]).toArray(this.edgeBase, e * 6 + 3);
+			}
+			this.writeEdgeColors();
+			this.setupPulses();
+		}
 		this.requestFrame();
 	}
 
@@ -635,8 +680,45 @@ export class BrainRenderer {
 
 	// ---------- Cena ----------
 
+	/** Cor da região nos materiais de shader (nós, halos, pulsos), que escrevem a cor sem conversão. */
 	private color(group: number): Color {
 		return this.colors[group + 1];
+	}
+
+	/** Cor da região nos links (LineBasicMaterial, que converte linear -> sRGB na saída). */
+	private edgeColor(group: number): Color {
+		return this.edgeColors[group + 1];
+	}
+
+	private get additiveGlow(): boolean {
+		return this.theme.glowBlending === AdditiveBlending;
+	}
+
+	private setGroupColors(): void {
+		const count = this.graph?.groupCount ?? 0;
+		this.colors = Array.from({ length: count + 1 }, (_, k) => groupColor(this.theme, k - 1));
+		// Paleta "como se vê": os links recebem a versão linear para mostrar o mesmo tom dos nós.
+		this.edgeColors = this.theme.displayPalette
+			? this.colors.map((c) => c.clone().convertSRGBToLinear())
+			: this.colors;
+	}
+
+	/** Fundo, névoa, uniforms de cor e blending dos brilhos. */
+	private applyTheme(): void {
+		const t = this.theme;
+		this.renderer.setClearColor(t.bg, 1);
+		this.fog.color.copy(t.bg);
+		this.edgeMat.opacity = t.edgeOpacity;
+		this.surfaceMat.uniforms.uRimColor.value.copy(t.rim);
+		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) {
+			m.uniforms.uBg.value.copy(t.bg);
+			m.uniforms.uFlash.value.copy(t.flash);
+			m.uniforms.uRing.value = t.nodeRing;
+		}
+		for (const m of [this.haloMat, this.pulseMat, this.ambientMat]) {
+			m.blending = t.glowBlending;
+			m.uniforms.uGain.value = t.glowGain;
+		}
 	}
 
 	private get camera(): PerspectiveCamera | OrthographicCamera {
@@ -753,8 +835,8 @@ export class BrainRenderer {
 		this.edgeFocus = new Float32Array(m).fill(1);
 		this.edgeLen = new Float32Array(m);
 		for (let e = 0; e < m; e++) {
-			this.color(g.group[g.edges[e * 2]]).toArray(this.edgeBase, e * 6);
-			this.color(g.group[g.edges[e * 2 + 1]]).toArray(this.edgeBase, e * 6 + 3);
+			this.edgeColor(g.group[g.edges[e * 2]]).toArray(this.edgeBase, e * 6);
+			this.edgeColor(g.group[g.edges[e * 2 + 1]]).toArray(this.edgeBase, e * 6 + 3);
 		}
 		const geo = new BufferGeometry();
 		geo.setAttribute("position", new BufferAttribute(new Float32Array(verts * 3), 3));
@@ -1044,12 +1126,15 @@ export class BrainRenderer {
 		const geo = this.ambient.geometry;
 		const pArr = (geo.getAttribute("position") as BufferAttribute).array as Float32Array;
 		const cArr = (geo.getAttribute("aColor") as BufferAttribute).array as Float32Array;
+		const aArr = (geo.getAttribute("aAlpha") as BufferAttribute).array as Float32Array;
+		const additive = this.additiveGlow;
 		const col = this.ambColor;
 		const pt = this.pt;
 		for (let p = 0; p < this.ambCount; p++) {
 			if (!this.ambAlive[p]) {
 				const o = p * PULSE_TRAIL * 3;
 				cArr.fill(0, o, o + PULSE_TRAIL * 3);
+				aArr.fill(0, p * PULSE_TRAIL, (p + 1) * PULSE_TRAIL);
 				continue;
 			}
 			this.ambT[p] += this.ambSpeed[p] * dt;
@@ -1090,14 +1175,15 @@ export class BrainRenderer {
 			const e = this.ambEdge[p];
 			const dir = this.ambDir[p];
 			const head = this.ambT[p];
-			col.copy(this.color(g.group[g.edges[e * 2 + 1 - dir]])).lerp(WHITE, this.ambGen[p] > 0 ? 0.6 : 0.35);
-			if (this.ambGen[p] > 0) col.multiplyScalar(1.5); // reação em cadeia: mais brilhante (aditivo)
+			col.copy(this.color(g.group[g.edges[e * 2 + 1 - dir]])).lerp(this.theme.pulseTint, this.ambGen[p] > 0 ? 0.6 : 0.35);
+			if (this.ambGen[p] > 0 && additive) col.multiplyScalar(1.5); // reação em cadeia: mais brilhante
 			const env = Math.sin(Math.PI * head);
 			for (let k = 0; k < PULSE_TRAIL; k++) {
 				const o = (p * PULSE_TRAIL + k) * 3;
 				const t = head - k * TRAIL_STEP;
 				if (t < 0) {
 					cArr[o] = cArr[o + 1] = cArr[o + 2] = 0;
+					aArr[p * PULSE_TRAIL + k] = 0;
 					continue;
 				}
 				const eased = t * t * (3 - 2 * t);
@@ -1105,15 +1191,19 @@ export class BrainRenderer {
 				pArr[o] = pt[0];
 				pArr[o + 1] = pt[1];
 				pArr[o + 2] = pt[2];
+				// Aditivo: esmaece pela cor. Normal: cor cheia, esmaece pela transparência.
 				const fade = env * (1 - k / PULSE_TRAIL);
-				cArr[o] = col.r * fade;
-				cArr[o + 1] = col.g * fade;
-				cArr[o + 2] = col.b * fade;
+				const cf = additive ? fade : 1;
+				cArr[o] = col.r * cf;
+				cArr[o + 1] = col.g * cf;
+				cArr[o + 2] = col.b * cf;
+				aArr[p * PULSE_TRAIL + k] = additive ? 1 : fade;
 			}
 		}
 		geo.setDrawRange(0, this.ambCount * PULSE_TRAIL);
 		(geo.getAttribute("position") as BufferAttribute).needsUpdate = true;
 		(geo.getAttribute("aColor") as BufferAttribute).needsUpdate = true;
+		(geo.getAttribute("aAlpha") as BufferAttribute).needsUpdate = true;
 		return true;
 	}
 
@@ -1133,7 +1223,7 @@ export class BrainRenderer {
 			this.pulseT[p] = (p * 0.37) % 1; // fases espalhadas: não saem todos juntos
 		});
 		this.pulseCount = edges.length;
-		this.pulseColor.copy(this.color(g.group[h])).lerp(WHITE, 0.45);
+		this.pulseColor.copy(this.color(g.group[h])).lerp(this.theme.pulseTint, 0.45);
 	}
 
 	/** Avança os pulsos. Retorna true se precisa de mais frames. */
@@ -1146,6 +1236,8 @@ export class BrainRenderer {
 		const geo = this.pulses.geometry;
 		const pArr = (geo.getAttribute("position") as BufferAttribute).array as Float32Array;
 		const cArr = (geo.getAttribute("aColor") as BufferAttribute).array as Float32Array;
+		const aArr = (geo.getAttribute("aAlpha") as BufferAttribute).array as Float32Array;
+		const additive = this.additiveGlow;
 		const col = this.pulseColor;
 		const pt = this.pt;
 		for (let p = 0; p < this.pulseCount; p++) {
@@ -1157,6 +1249,7 @@ export class BrainRenderer {
 				const t = head - k * TRAIL_STEP;
 				if (t < 0) {
 					cArr[o] = cArr[o + 1] = cArr[o + 2] = 0; // aditivo: cor 0 = invisível
+					aArr[p * PULSE_TRAIL + k] = 0;
 					continue;
 				}
 				// Easing: acelera ao sair da nota e desacelera ao chegar no vizinho.
@@ -1165,15 +1258,19 @@ export class BrainRenderer {
 				pArr[o] = pt[0];
 				pArr[o + 1] = pt[1];
 				pArr[o + 2] = pt[2];
+				// Aditivo: esmaece pela cor. Normal: cor cheia, esmaece pela transparência.
 				const fade = env * (1 - k / PULSE_TRAIL);
-				cArr[o] = col.r * fade;
-				cArr[o + 1] = col.g * fade;
-				cArr[o + 2] = col.b * fade;
+				const cf = additive ? fade : 1;
+				cArr[o] = col.r * cf;
+				cArr[o + 1] = col.g * cf;
+				cArr[o + 2] = col.b * cf;
+				aArr[p * PULSE_TRAIL + k] = additive ? 1 : fade;
 			}
 		}
 		geo.setDrawRange(0, this.pulseCount * PULSE_TRAIL);
 		(geo.getAttribute("position") as BufferAttribute).needsUpdate = true;
 		(geo.getAttribute("aColor") as BufferAttribute).needsUpdate = true;
+		(geo.getAttribute("aAlpha") as BufferAttribute).needsUpdate = true;
 		return true;
 	}
 
@@ -1218,17 +1315,19 @@ export class BrainRenderer {
 		const attr = this.edges.geometry.getAttribute("color") as BufferAttribute;
 		const out = attr.array as Float32Array;
 		const base = this.edgeBase;
+		const gain = this.theme.edgeGain;
 		const m = this.edgeFocus.length;
 		let w = 0;
 		for (let k = 0; k < m; k++) {
 			// Links longos mais discretos; em foco, destacados; fora de foco, quase no fundo.
 			const f = this.edgeFocus[k];
-			const s = f > 1 ? 1 : f * Math.max(0.35, Math.min(1, 0.35 / (this.edgeLen[k] + 1e-3))) * 0.6;
+			const bg = f < 1 ? this.theme.bg : this.theme.edgeFade;
+			const s = f > 1 ? 1 : Math.min(1, f * Math.max(0.35, Math.min(1, 0.35 / (this.edgeLen[k] + 1e-3))) * 0.6 * gain);
 			for (let v = 0; v < EDGE_SEGMENTS * 2; v++) {
 				const t = ((v + 1) >> 1) / EDGE_SEGMENTS;
-				out[w++] = BG.r + ((base[k * 6] * (1 - t) + base[k * 6 + 3] * t) - BG.r) * s;
-				out[w++] = BG.g + ((base[k * 6 + 1] * (1 - t) + base[k * 6 + 4] * t) - BG.g) * s;
-				out[w++] = BG.b + ((base[k * 6 + 2] * (1 - t) + base[k * 6 + 5] * t) - BG.b) * s;
+				out[w++] = bg.r + ((base[k * 6] * (1 - t) + base[k * 6 + 3] * t) - bg.r) * s;
+				out[w++] = bg.g + ((base[k * 6 + 1] * (1 - t) + base[k * 6 + 4] * t) - bg.g) * s;
+				out[w++] = bg.b + ((base[k * 6 + 2] * (1 - t) + base[k * 6 + 5] * t) - bg.b) * s;
 			}
 		}
 		attr.needsUpdate = true;
@@ -1466,4 +1565,3 @@ export class BrainRenderer {
 	}
 }
 
-const WHITE = new Color(1, 1, 1);

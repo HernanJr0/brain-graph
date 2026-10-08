@@ -2,6 +2,7 @@ import { ItemView, Keymap, TFile, WorkspaceLeaf, debounce, setIcon } from "obsid
 import type BrainGraphPlugin from "./main";
 import { buildGraphCore, type GraphCore } from "./graph-core";
 import { BrainRenderer, type ViewPreset } from "./renderer";
+import { isForced, resolveTheme } from "./theme";
 
 export const VIEW_TYPE_BRAIN = "brain-graph-view";
 
@@ -16,6 +17,8 @@ export class BrainGraphView extends ItemView {
 	/** Renomeações desde o último rebuild (caminho antigo -> novo), para a nota manter a posição. */
 	private readonly renames = new Map<string, string>();
 	private savedCount = 0;
+	/** Tema aplicado (tipo + fundo), para não repintar a cada css-change sem mudança real. */
+	private themeKey = "";
 
 	private readonly scheduleRebuild = debounce(() => this.rebuild(false), 1500, true);
 
@@ -42,6 +45,10 @@ export class BrainGraphView extends ItemView {
 		const stage = root.createDiv({ cls: "brain-graph-stage" });
 		this.buildToolbar(root);
 
+		const theme = resolveTheme(this.plugin.settings.appearance, root);
+		this.themeKey = theme.kind + theme.bg.getHexString();
+		root.toggleClass("is-light", theme.kind === "light");
+		root.toggleClass("is-forced", isForced(this.plugin.settings.appearance, root));
 		this.renderer = new BrainRenderer(stage, { ...this.plugin.settings }, {
 			onNodeClick: (i, evt) => void this.openNode(i, evt),
 			onRestChange: (resting) => root.toggleClass("is-resting", resting),
@@ -55,7 +62,7 @@ export class BrainGraphView extends ItemView {
 					`${st.fps.toFixed(0)} fps${ok} · worst ${st.worstGapMs.toFixed(0)} ms · cpu ${st.cpuMs.toFixed(1)} ms · ${st.bufferWidth}×${st.bufferHeight}`,
 				);
 			},
-		});
+		}, theme);
 		// Mexer na barra, digitar ou usar o teclado também tira da tela de descanso.
 		const wake = () => this.renderer?.wake();
 		this.registerDomEvent(root, "pointermove", wake);
@@ -75,6 +82,8 @@ export class BrainGraphView extends ItemView {
 			}),
 		);
 		this.registerEvent(this.app.workspace.on("file-open", () => this.syncActive()));
+		// Troca de tema (claro/escuro) ou de cores do tema do Obsidian.
+		this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
 	}
 
 	async onClose(): Promise<void> {
@@ -91,6 +100,7 @@ export class BrainGraphView extends ItemView {
 	/** Chamado pelo plugin quando as configurações mudam. */
 	applySettings(rebuild: false | "keep" | "fresh"): void {
 		this.renderer?.setOptions({ ...this.plugin.settings });
+		this.applyTheme();
 		this.refreshButtons();
 		if (rebuild) this.rebuild(rebuild === "fresh");
 	}
@@ -136,6 +146,18 @@ export class BrainGraphView extends ItemView {
 		1000,
 		true,
 	);
+
+	private applyTheme(): void {
+		if (!this.renderer) return;
+		const appearance = this.plugin.settings.appearance;
+		const theme = resolveTheme(appearance, this.contentEl);
+		this.contentEl.toggleClass("is-forced", isForced(appearance, this.contentEl));
+		const key = theme.kind + theme.bg.getHexString();
+		if (key === this.themeKey) return;
+		this.themeKey = key;
+		this.contentEl.toggleClass("is-light", theme.kind === "light");
+		this.renderer.setTheme(theme);
+	}
 
 	private syncActive(): void {
 		const file = this.app.workspace.getActiveFile();

@@ -1,17 +1,100 @@
-/* Mesmo padrão das views nativas (canvas, pdf…) para tirar o padding da view. */
+/*
+ * Mesmo padrão das views nativas (canvas, pdf…) para tirar o padding da view. O overflow fica aqui,
+ * com a mesma especificidade: a regra genérica do .view-content (overflow: auto) venceria uma classe só.
+ */
 .workspace-leaf-content[data-type="brain-graph-view"] .view-content.brain-graph-container {
 	padding: 0;
+	overflow: hidden;
 }
 
+/*
+ * Cores da interface: vêm do tema do Obsidian nos dois modos. Os valores depois da vírgula
+ * só valem fora dele (preview de desenvolvimento).
+ */
 .brain-graph-container {
+	--brain-graph-stage-bg: var(--background-primary, #070a12);
+	--brain-graph-label-fg: var(--text-normal, rgba(225, 235, 255, 0.92));
+	--brain-graph-label-bg: color-mix(in srgb, var(--background-primary, #070a12) 70%, transparent);
+	--brain-graph-hub-fg: var(--text-muted, rgba(205, 220, 255, 0.78));
+	--brain-graph-hub-bg: color-mix(in srgb, var(--background-primary, #070a12) 55%, transparent);
+	--brain-graph-hover-fg: var(--text-normal, #fff);
+	--brain-graph-active-fg: var(--text-accent, #ffe9a8);
+	--brain-graph-btn-fg: var(--text-normal, #cfe0ff);
+	--brain-graph-btn-bg: color-mix(in srgb, var(--background-secondary, #121a30) 85%, transparent);
+	--brain-graph-btn-border: var(--background-modifier-border, rgba(120, 160, 255, 0.2));
+	--brain-graph-btn-hover-bg: var(--background-modifier-hover, rgba(40, 56, 100, 0.85));
+	--brain-graph-btn-active-bg: color-mix(in srgb, var(--interactive-accent, #5078ff) 28%, transparent);
+	--brain-graph-btn-active-border: color-mix(in srgb, var(--interactive-accent, #8cb4ff) 60%, transparent);
+	--brain-graph-input-fg: var(--text-normal, #e6eeff);
+	--brain-graph-stats-fg: var(--text-faint, rgba(190, 210, 255, 0.55));
+	--brain-graph-perf-fg: var(--text-muted, rgba(190, 210, 255, 0.7));
 	position: relative;
 	overflow: hidden;
+}
+
+/* Claro fora do Obsidian: só os valores de reserva mudam. */
+.brain-graph-container.is-light {
+	--brain-graph-stage-bg: var(--background-primary, #f7f8fb);
+	--brain-graph-label-fg: var(--text-normal, #1f2430);
+	--brain-graph-label-bg: color-mix(in srgb, var(--background-primary, #f7f8fb) 78%, transparent);
+	--brain-graph-hub-fg: var(--text-muted, #4b5263);
+	--brain-graph-hub-bg: color-mix(in srgb, var(--background-primary, #f7f8fb) 62%, transparent);
+	--brain-graph-hover-fg: var(--text-normal, #1f2430);
+	--brain-graph-active-fg: var(--text-accent, #6d28d9);
+	--brain-graph-btn-fg: var(--text-normal, #1f2430);
+	--brain-graph-btn-bg: color-mix(in srgb, var(--background-primary, #f7f8fb) 85%, transparent);
+	--brain-graph-btn-border: var(--background-modifier-border, rgba(15, 23, 42, 0.14));
+	--brain-graph-btn-hover-bg: var(--background-modifier-hover, rgba(15, 23, 42, 0.07));
+	--brain-graph-btn-active-bg: color-mix(in srgb, var(--interactive-accent, #7c3aed) 18%, transparent);
+	--brain-graph-btn-active-border: color-mix(in srgb, var(--interactive-accent, #7c3aed) 55%, transparent);
+	--brain-graph-input-fg: var(--text-normal, #1f2430);
+	--brain-graph-stats-fg: var(--text-faint, rgba(31, 36, 48, 0.55));
+	--brain-graph-perf-fg: var(--text-muted, rgba(31, 36, 48, 0.7));
+}
+
+/* Modo forçado contrário ao do Obsidian: as variáveis do tema não combinam, usa cores próprias. */
+.brain-graph-container.is-forced {
+	--brain-graph-stage-bg: #070a12;
+	--brain-graph-label-fg: rgba(225, 235, 255, 0.92);
+	--brain-graph-label-bg: rgba(4, 7, 16, 0.62);
+	--brain-graph-hub-fg: rgba(205, 220, 255, 0.78);
+	--brain-graph-hub-bg: rgba(4, 7, 16, 0.45);
+	--brain-graph-hover-fg: #fff;
+	--brain-graph-active-fg: #ffe9a8;
+	--brain-graph-btn-fg: #cfe0ff;
+	--brain-graph-btn-bg: rgba(18, 26, 48, 0.75);
+	--brain-graph-btn-border: rgba(120, 160, 255, 0.2);
+	--brain-graph-btn-hover-bg: rgba(40, 56, 100, 0.85);
+	--brain-graph-btn-active-bg: rgba(80, 120, 255, 0.35);
+	--brain-graph-btn-active-border: rgba(140, 180, 255, 0.6);
+	--brain-graph-input-fg: #e6eeff;
+	--brain-graph-stats-fg: rgba(190, 210, 255, 0.55);
+	--brain-graph-perf-fg: rgba(190, 210, 255, 0.7);
+}
+
+.brain-graph-container.is-light.is-forced {
+	--brain-graph-stage-bg: #f7f8fb;
+	--brain-graph-label-fg: #1f2430;
+	--brain-graph-label-bg: rgba(247, 248, 251, 0.78);
+	--brain-graph-hub-fg: #4b5263;
+	--brain-graph-hub-bg: rgba(247, 248, 251, 0.62);
+	--brain-graph-hover-fg: #1f2430;
+	--brain-graph-active-fg: #6d28d9;
+	--brain-graph-btn-fg: #1f2430;
+	--brain-graph-btn-bg: rgba(247, 248, 251, 0.85);
+	--brain-graph-btn-border: rgba(15, 23, 42, 0.14);
+	--brain-graph-btn-hover-bg: rgba(15, 23, 42, 0.07);
+	--brain-graph-btn-active-bg: rgba(124, 58, 237, 0.18);
+	--brain-graph-btn-active-border: rgba(124, 58, 237, 0.55);
+	--brain-graph-input-fg: #1f2430;
+	--brain-graph-stats-fg: rgba(31, 36, 48, 0.55);
+	--brain-graph-perf-fg: rgba(31, 36, 48, 0.7);
 }
 
 .brain-graph-stage {
 	position: absolute;
 	inset: 0;
-	background: radial-gradient(ellipse at 50% 45%, #0e1630 0%, #060913 55%, #020308 100%);
+	background: var(--brain-graph-stage-bg);
 }
 
 .brain-graph-stage canvas {
@@ -35,8 +118,8 @@
 	line-height: 1;
 	padding: 2px 5px;
 	border-radius: 4px;
-	color: rgba(225, 235, 255, 0.92);
-	background: rgba(4, 7, 16, 0.62);
+	color: var(--brain-graph-label-fg);
+	background: var(--brain-graph-label-bg);
 	white-space: nowrap;
 	will-change: transform;
 }
@@ -47,19 +130,19 @@
 
 .brain-graph-label.is-hub {
 	font-size: 10px;
-	color: rgba(205, 220, 255, 0.78);
-	background: rgba(4, 7, 16, 0.45);
+	color: var(--brain-graph-hub-fg);
+	background: var(--brain-graph-hub-bg);
 }
 
 .brain-graph-label.is-hover,
 .brain-graph-label.is-active {
-	color: #fff;
+	color: var(--brain-graph-hover-fg);
 	font-weight: 600;
 	font-size: 12px;
 }
 
 .brain-graph-label.is-active {
-	color: #ffe9a8;
+	color: var(--brain-graph-active-fg);
 }
 
 .brain-graph-toolbar {
@@ -88,21 +171,21 @@
 	height: 26px;
 	padding: 0 9px;
 	font-size: 12px;
-	color: #cfe0ff;
-	background: rgba(18, 26, 48, 0.75);
-	border: 1px solid rgba(120, 160, 255, 0.2);
+	color: var(--brain-graph-btn-fg);
+	background: var(--brain-graph-btn-bg);
+	border: 1px solid var(--brain-graph-btn-border);
 	border-radius: 6px;
 	box-shadow: none;
 	cursor: pointer;
 }
 
 .brain-graph-toolbar .brain-graph-btn:hover {
-	background: rgba(40, 56, 100, 0.85);
+	background: var(--brain-graph-btn-hover-bg);
 }
 
 .brain-graph-toolbar .brain-graph-btn.is-active {
-	background: rgba(80, 120, 255, 0.35);
-	border-color: rgba(140, 180, 255, 0.6);
+	background: var(--brain-graph-btn-active-bg);
+	border-color: var(--brain-graph-btn-active-border);
 }
 
 .brain-graph-toolbar .brain-graph-btn svg {
@@ -119,16 +202,16 @@
 	height: 26px;
 	width: 160px;
 	font-size: 12px;
-	color: #e6eeff;
-	background: rgba(18, 26, 48, 0.75);
-	border: 1px solid rgba(120, 160, 255, 0.2);
+	color: var(--brain-graph-input-fg);
+	background: var(--brain-graph-btn-bg);
+	border: 1px solid var(--brain-graph-btn-border);
 	border-radius: 6px;
 }
 
 .brain-graph-stats {
 	margin-left: auto;
 	font-size: 11px;
-	color: rgba(190, 210, 255, 0.55);
+	color: var(--brain-graph-stats-fg);
 	pointer-events: none;
 }
 
@@ -139,7 +222,7 @@
 	z-index: 2;
 	font-family: var(--font-monospace);
 	font-size: 11px;
-	color: rgba(190, 210, 255, 0.7);
+	color: var(--brain-graph-perf-fg);
 	pointer-events: none;
 }
 

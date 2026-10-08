@@ -2,6 +2,7 @@
 import { mulberry32 } from "../src/brain-shape";
 import { buildGraphCore, type LinkMap } from "../src/graph-core";
 import { BrainRenderer } from "../src/renderer";
+import { isForced, resolveTheme, type Appearance } from "../src/theme";
 
 // O renderer usa helpers de DOM que o Obsidian adiciona ao HTMLElement; fora dele, um polyfill mínimo.
 declare global {
@@ -42,6 +43,21 @@ const mode = (params.get("mode") as "3d" | "2d") ?? "3d";
 const r = new BrainRenderer(stage, { mode, showCortex: true, nodeSize: 1, hubLabels: true, glow: !params.has("noglow"), hoverPulses: true, ambientPulses: !params.has("noambient"), ambientCount: 45, idleAnimation: !params.has("noidle"), surface: !params.has("cloud"), dof: !params.has("nodof"), idleOrbit: true }, {
 	onNodeClick: (i) => console.log("click", i),
 });
+// Simula o Obsidian: ?obsidian=dark|light&bg=1e1e1e ou bg=oklch(…) (fundo do tema) e ?theme=auto|dark|light (Appearance).
+const obsidian = params.get("obsidian");
+if (obsidian) {
+	document.body.classList.add(obsidian === "light" ? "theme-light" : "theme-dark");
+	const bg = params.get("bg");
+	if (bg) document.body.style.setProperty("--background-primary", bg.includes("(") ? bg : `#${bg}`);
+}
+const appearance = (params.get("theme") ?? (obsidian ? "auto" : "dark")) as Appearance;
+if (obsidian || appearance !== "dark") {
+	const wrap = document.getElementById("wrap")!;
+	const theme = resolveTheme(appearance, wrap);
+	wrap.classList.toggle("is-light", theme.kind === "light");
+	wrap.classList.toggle("is-forced", isForced(appearance, wrap));
+	r.setTheme(theme);
+}
 const g = buildGraphCore(paths, links, { groupBy: "links", includeOrphans: true });
 r.setGraph(g);
 const preset = params.get("view");

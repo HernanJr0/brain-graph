@@ -9,8 +9,11 @@ An Obsidian plugin that draws your vault as a brain, in 2D or 3D. It's a lightwe
 - **Orphans:** notes without links live in the cerebellum.
 - **Fibers:** the links. With the surface off (default), they dive toward the center like white matter. With the surface on, they arch over the outside.
 - **Stable map:** positions are saved, so the brain always opens the same way. New notes land near their neighbors without shuffling the rest.
+- **Fits your theme:** light and dark modes follow Obsidian, using your theme's background and interface colors.
 
 ![Idle animation with pulses running along the links](./images/brain-graph-idle.webp)
+
+![Light mode following a light Obsidian theme](./images/brain-graph-light.webp)
 
 ## Installation
 
@@ -42,9 +45,10 @@ When updating manually, replace the files and **restart Obsidian**. Toggling the
 | Option | Default | What it does |
 | --- | --- | --- |
 | Default mode | 3D | How the graph opens |
+| Appearance | Follow Obsidian | Light or dark. *Follow Obsidian* switches together with your theme and uses its background; *Dark* or *Light* force a mode |
 | Group regions by | Links | Link communities or top-level folder |
 | Show orphan notes | on | Notes without links in the cerebellum |
-| Brain surface | off | Dark surface with notes on the outside, instead of the point cloud |
+| Brain surface | off | Translucent surface with notes on the outside, instead of the point cloud |
 | Depth of field | on | Blurs and dims what is behind the center |
 | Show cortex | on | Anatomical outline: fissures, sulci, lobes, cerebellum and brainstem |
 | Node glow | on | Halo around notes |

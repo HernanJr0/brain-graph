@@ -10,7 +10,8 @@ import {
 import type { GraphCore } from "./graph-core";
 
 /** Mude quando a anatomia ou o algoritmo mudarem: invalida posições salvas. */
-export const LAYOUT_VERSION = 4;
+// 5: agrupamento independente da ordem dos arquivos + junção de comunidades por modularidade.
+export const LAYOUT_VERSION = 5;
 
 // Notas ficam numa película logo acima da superfície do cérebro (que é quase opaca).
 const CORTEX_INNER = 1.012;
