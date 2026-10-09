@@ -709,10 +709,10 @@ export class BrainRenderer {
 		this.renderer.setClearColor(t.bg, 1);
 		this.fog.color.copy(t.bg);
 		this.edgeMat.opacity = t.edgeOpacity;
-		this.surfaceMat.uniforms.uRimColor.value.copy(t.rim);
+		(this.surfaceMat.uniforms.uRimColor.value as Color).copy(t.rim);
 		for (const m of [this.shellMat, this.nodeMat, this.haloMat, this.pulseMat, this.ambientMat]) {
-			m.uniforms.uBg.value.copy(t.bg);
-			m.uniforms.uFlash.value.copy(t.flash);
+			(m.uniforms.uBg.value as Color).copy(t.bg);
+			(m.uniforms.uFlash.value as Color).copy(t.flash);
 			m.uniforms.uRing.value = t.nodeRing;
 		}
 		for (const m of [this.haloMat, this.pulseMat, this.ambientMat]) {

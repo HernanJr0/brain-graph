@@ -170,13 +170,12 @@ export function obsidianThemeKind(doc: Document): ThemeKind {
  * próprio navegador converte: a cor é pintada num pixel de canvas e o RGB é lido de volta.
  */
 export function obsidianBackground(el: HTMLElement, fallback: string): Color {
-	const doc = el.ownerDocument;
-	const probe = doc.createElement("div");
-	probe.style.cssText = "position:absolute;visibility:hidden;background-color:var(--background-primary)";
-	el.appendChild(probe);
+	const probe = el.createDiv({ cls: "brain-graph-bg-probe" });
 	const value = getComputedStyle(probe).backgroundColor;
+	// O canvas nasce dentro da sonda (mesmo documento da view) e continua usável depois de removido.
+	const canvas = probe.createEl("canvas");
 	probe.remove();
-	const ctx = doc.createElement("canvas").getContext("2d", { willReadFrequently: true });
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
 	if (!ctx) return new Color(fallback);
 	ctx.canvas.width = ctx.canvas.height = 1;
 	// Valor inválido é ignorado pelo canvas: começar transparente faz ele cair no padrão.
@@ -210,7 +209,8 @@ export function shellColors(
 	const { boundary, sulcusGain, cerebellum, spine } = theme.shell;
 	for (let i = 0; i < shell.kind.length; i++) {
 		const o = i * 3;
-		switch (shell.kind[i]) {
+		const kind: ShellKind = shell.kind[i];
+		switch (kind) {
 			case ShellKind.Boundary:
 				out.set(boundary, o);
 				break;

@@ -244,3 +244,10 @@
 .brain-graph-container.is-resting canvas {
 	cursor: none;
 }
+
+/* Sonda invisível para ler a cor de fundo do tema (theme.ts → obsidianBackground). */
+.brain-graph-bg-probe {
+	position: absolute;
+	visibility: hidden;
+	background-color: var(--background-primary);
+}

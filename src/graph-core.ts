@@ -178,7 +178,7 @@ function mergeCommunities(label: Int32Array, edges: Uint32Array, degree: Uint32A
 	const between = new Map<number, Map<number, number>>();
 	const link = (a: number, b: number, w: number) => {
 		let row = between.get(a);
-		if (!row) between.set(a, (row = new Map()));
+		if (!row) between.set(a, (row = new Map<number, number>()));
 		row.set(b, (row.get(b) ?? 0) + w);
 	};
 	for (let e = 0; e < m; e++) {
