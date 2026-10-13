@@ -226,14 +226,130 @@
 	pointer-events: none;
 }
 
+/* Legenda de regiões: painel à direita, abaixo da barra. */
+.brain-graph-legend {
+	position: absolute;
+	top: 42px;
+	right: 8px;
+	z-index: 2;
+	width: 250px;
+	max-width: calc(100% - 16px);
+	max-height: calc(100% - 84px);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px;
+	font-size: 12px;
+	color: var(--brain-graph-btn-fg);
+	background: var(--brain-graph-btn-bg);
+	border: 1px solid var(--brain-graph-btn-border);
+	border-radius: 8px;
+}
+
+.brain-graph-legend.is-hidden {
+	display: none;
+}
+
+.brain-graph-legend-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.brain-graph-legend-title {
+	font-weight: 600;
+}
+
+.brain-graph-legend .brain-graph-legend-palette {
+	height: 24px;
+	font-size: 12px;
+	max-width: 150px;
+}
+
+.brain-graph-legend-list {
+	overflow-y: auto;
+	min-height: 0;
+}
+
+.brain-graph-legend-row {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto 20px;
+	align-items: center;
+	gap: 8px;
+	height: 24px;
+	padding: 0 4px;
+	border-radius: 4px;
+}
+
+.brain-graph-legend-row:hover {
+	background: var(--brain-graph-btn-hover-bg);
+}
+
+/* O seletor de cor nativo vira uma bolinha. */
+.brain-graph-legend .brain-graph-legend-swatch {
+	appearance: none;
+	width: 14px;
+	height: 14px;
+	padding: 0;
+	border: 1px solid var(--brain-graph-btn-border);
+	border-radius: 50%;
+	background: none;
+	cursor: pointer;
+	overflow: hidden;
+}
+
+.brain-graph-legend-swatch::-webkit-color-swatch-wrapper {
+	padding: 0;
+}
+
+.brain-graph-legend-swatch::-webkit-color-swatch {
+	border: none;
+	border-radius: 50%;
+}
+
+.brain-graph-legend-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.brain-graph-legend-count,
+.brain-graph-legend-more {
+	color: var(--brain-graph-stats-fg);
+	font-variant-numeric: tabular-nums;
+}
+
+.brain-graph-legend-more {
+	padding: 2px 4px;
+	font-size: 11px;
+}
+
+.brain-graph-legend .brain-graph-legend-reset {
+	grid-column: 4;
+	width: 20px;
+	height: 20px;
+	padding: 2px;
+	color: var(--brain-graph-stats-fg);
+	background: none;
+	box-shadow: none;
+}
+
+.brain-graph-legend .brain-graph-legend-reset svg {
+	width: 13px;
+	height: 13px;
+}
+
 /* Tela de descanso: a interface some devagar e volta rápido. */
 .brain-graph-toolbar,
+.brain-graph-legend,
 .brain-graph-perf,
 .brain-graph-labels {
 	transition: opacity 0.25s ease;
 }
 
 .brain-graph-container.is-resting .brain-graph-toolbar,
+.brain-graph-container.is-resting .brain-graph-legend,
 .brain-graph-container.is-resting .brain-graph-perf,
 .brain-graph-container.is-resting .brain-graph-labels {
 	opacity: 0;
@@ -245,9 +361,14 @@
 	cursor: none;
 }
 
-/* Sonda invisível para ler a cor de fundo do tema (theme.ts → obsidianBackground). */
-.brain-graph-bg-probe {
+/* Sondas invisíveis para ler cores do tema (theme.ts → obsidianBackground, obsidianAccent). */
+.brain-graph-bg-probe,
+.brain-graph-accent-probe {
 	position: absolute;
 	visibility: hidden;
 	background-color: var(--background-primary);
+}
+
+.brain-graph-accent-probe {
+	background-color: var(--interactive-accent);
 }

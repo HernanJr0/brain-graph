@@ -10,6 +10,7 @@ An Obsidian plugin that draws your vault as a brain, in 2D or 3D. It's a lightwe
 - **Fibers:** the links. With the surface off (default), they dive toward the center like white matter. With the surface on, they arch over the outside.
 - **Stable map:** positions are saved, so the brain always opens the same way. New notes land near their neighbors without shuffling the rest.
 - **Fits your theme:** light and dark modes follow Obsidian, using your theme's background and interface colors.
+- **Your colors:** pick a ready-made palette, paint a region straight from the legend, or color notes by folder, tag or a `color` property. No queries to write.
 
 ![Idle animation with pulses running along the links](./images/brain-graph-idle.webp)
 
@@ -38,7 +39,19 @@ When updating manually, replace the files and **restart Obsidian**. Toggling the
 
 - **Navigate:** drag to orbit (3D) or pan (2D), scroll to zoom. Click a note to open it; Ctrl/Cmd+click opens it in a new tab.
 - **Graph toolbar:** switches 2D/3D, jumps to side, top and front views, toggles cortex, surface, depth of field, glow and ambient pulses, and has a search by note name.
+- **Region colors:** the palette button in the toolbar opens the legend. Hover a region to highlight it in the brain, click its dot to pick a color (it updates live), and use ↺ to go back to the palette. You can also right-click a note → *Color this region…*.
 - **Commands:** "Open graph view", "Recalculate layout" and "Toggle 2D/3D".
+
+### Colors
+
+From the simplest to the most detailed:
+
+1. **Palette:** *Nebula* (default), *Aurora*, *Ember*, *Pastel*, *Accent* (shades of your theme's accent color) and *Colorblind safe* (Okabe-Ito). Each one has a light and a dark variant.
+2. **Legend:** paint a region with any color. With *Group regions by: Links*, the color sticks to the region's five most connected notes, so it survives renames, new notes and even deleting the hub.
+3. **Color rules:** in the settings, color every note in a folder (subfolders included) or with a tag (nested tags included). The first matching rule wins; drag to reorder. Each rule shows how many notes it matches.
+4. **Color property:** `color: "#ff8800"` in a note's frontmatter colors that note. Invalid values are ignored.
+
+Priority: color property > rules > legend > palette. In light mode, your own colors are darkened if needed so they stay visible on the light background (and lightened in dark mode).
 
 ### Settings
 
@@ -57,6 +70,10 @@ When updating manually, replace the files and **restart Obsidian**. Toggling the
 | Idle animation | on | After about 1.5 s without input: a wave of activity, breathing glow, and the interface fades out |
 | Idle orbit | on | The camera slowly orbits while idle (3D) |
 | Node size / Hub labels | 1 / on | Appearance |
+| Color palette | Nebula | Colors of the regions, largest region first |
+| Color property | `color` | Frontmatter property with a note's own color; empty turns it off |
+| Reset region colors | — | Regions painted in the legend go back to the palette |
+| Color rules | none | Color notes by folder or tag; the first match wins |
 | Recalculate layout | — | Lays everything out again from scratch |
 
 ## Performance
@@ -70,7 +87,7 @@ The plugin is built to run at 20 fps or more on integrated GPUs.
 
 ## Privacy
 
-Brain Graph works fully offline. It lists the Markdown files in your vault and reads their links through Obsidian's metadata cache to build the graph; note contents never leave your machine. It makes no network requests, and only writes `data.json` (settings) and `layout.json` (positions) inside its own plugin folder.
+Brain Graph works fully offline. It lists the Markdown files in your vault and reads their links, tags and color property through Obsidian's metadata cache to build and color the graph; note contents never leave your machine. It makes no network requests, and only writes `data.json` (settings) and `layout.json` (positions) inside its own plugin folder.
 
 ## Development
 
@@ -83,7 +100,7 @@ npm run build    # type-check (tsc) + minified build
 npm run deploy   # build + copy to a test vault
 ```
 
-`deploy` uses the path given as an argument, or the `BRAIN_GRAPH_VAULT` variable, or `~/Documents/BrainGraph-Teste`. For a path with spaces, call `node dev/deploy.mjs "<vault>"` directly.
+`deploy` uses the path given as an argument (`npm run deploy -- "<vault>"`), or the `BRAIN_GRAPH_VAULT` variable, or `~/Documents/BrainGraph-Teste`.
 
 ### Preview outside Obsidian
 
@@ -102,6 +119,9 @@ URL parameters:
 - `view=superior|frontal`.
 - `cloud`: no surface.
 - Effects to turn off: `nodof`, `noglow`, `noambient`, `noidle`.
+- Simulated Obsidian theme: `obsidian=dark|light`, with `bg=<color>` for the theme background (hex without `#`, or a CSS function such as `oklch(…)`).
+- `theme=auto|dark|light`: the Appearance setting (default `auto` when `obsidian` is set, otherwise `dark`).
+- `palette=aurora|ember|pastel|accent|okabe-ito`: the color palette (default Nebula).
 
 ### Measurement scripts
 
@@ -116,10 +136,12 @@ Bundle with `npx esbuild dev/<script>.ts --bundle --platform=node --outfile=dev/
 | File | Role |
 | --- | --- |
 | `src/main.ts` | Plugin: view, commands, settings and persistence in `layout.json` |
-| `src/view.ts` | ItemView: toolbar, search, opening notes, incremental rebuild |
-| `src/graph-core.ts` | Graph from resolved links, with communities via label propagation |
+| `src/view.ts` | ItemView: toolbar, search, region legend, context menu, opening notes, incremental rebuild |
+| `src/graph-core.ts` | Graph from resolved links, with communities via label propagation plus modularity merging, in a stable order |
 | `src/layout.ts` | Affinity-based seeds, cortex slots by area, spatial-hash forces and projection onto the anatomy |
 | `src/brain-shape.ts` | Procedural SDF anatomy: stylized hemispheres, sulci, cerebellum and brainstem |
+| `src/colors.ts` | Palettes, regions and their anchors, folder/tag rules and the color property |
+| `src/theme.ts` | Light and dark themes: every scene color, and reading the Obsidian theme and background |
 | `src/renderer.ts` | Three.js: nodes, halos, fibers, pulses, surface, depth of field, idle animation and picking |
 | `src/settings.ts` | Settings |
 

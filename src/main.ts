@@ -1,6 +1,7 @@
-import { Plugin, normalizePath } from "obsidian";
+import { Plugin, TFile, getAllTags, normalizePath } from "obsidian";
+import type { NoteInfo } from "./colors";
 import { LAYOUT_VERSION } from "./layout";
-import { BrainGraphSettingTab, DEFAULT_SETTINGS, type BrainGraphSettings } from "./settings";
+import { BrainGraphSettingTab, DEFAULT_SETTINGS, type BrainGraphSettings, type Rebuild } from "./settings";
 import { BrainGraphView, VIEW_TYPE_BRAIN } from "./view";
 
 export default class BrainGraphPlugin extends Plugin {
@@ -8,11 +9,14 @@ export default class BrainGraphPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		const saved = (await this.loadData()) as Partial<BrainGraphSettings> | null;
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
-		// v2: padrão de pulsos ambientes subiu de 30 para 45 (só migra quem ainda estava no padrão antigo).
-		if (saved && (saved.settingsVersion ?? 1) < 2) {
-			if (saved.ambientCount === 30) this.settings.ambientCount = 45;
-			this.settings.settingsVersion = 2;
+		// Cópia dos padrões: as listas (regras, cores das regiões) não podem ser as do DEFAULT_SETTINGS.
+		this.settings = Object.assign(structuredClone(DEFAULT_SETTINGS), saved);
+		const version = saved?.settingsVersion ?? 1;
+		if (saved && version < DEFAULT_SETTINGS.settingsVersion) {
+			// v2: padrão de pulsos ambientes subiu de 30 para 45 (só migra quem ainda estava no padrão antigo).
+			if (version < 2 && saved.ambientCount === 30) this.settings.ambientCount = 45;
+			// v3: cores dos nós (só campos novos, com os padrões).
+			this.settings.settingsVersion = DEFAULT_SETTINGS.settingsVersion;
 			await this.saveData(this.settings);
 		}
 
@@ -42,11 +46,22 @@ export default class BrainGraphPlugin extends Plugin {
 	}
 
 	/**
-	 * @param rebuild "fresh" refaz o layout do zero; "keep" reconstrói mantendo as posições.
+	 * @param rebuild "fresh" refaz o layout do zero; "keep" reconstrói mantendo as posições; "colors" só recolore.
 	 */
-	async saveSettings(rebuild: false | "keep" | "fresh"): Promise<void> {
+	async saveSettings(rebuild: Rebuild): Promise<void> {
 		await this.saveData(this.settings);
 		for (const view of this.views()) view.applySettings(rebuild);
+	}
+
+	/** O que as cores precisam saber de uma nota: caminho, tags e a propriedade de cor. */
+	noteInfo(file: TFile): NoteInfo {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const prop = this.settings.colorProperty.trim();
+		return {
+			path: file.path,
+			tags: (cache && getAllTags(cache)) ?? [],
+			property: prop ? (cache?.frontmatter?.[prop] as unknown) : undefined,
+		};
 	}
 
 	relayout(): void {

@@ -1,8 +1,18 @@
-import { ItemView, Keymap, TFile, WorkspaceLeaf, debounce, setIcon } from "obsidian";
+import { ItemView, Keymap, Menu, TFile, WorkspaceLeaf, debounce, setIcon } from "obsidian";
 import type BrainGraphPlugin from "./main";
 import { buildGraphCore, type GraphCore } from "./graph-core";
-import { BrainRenderer, type ViewPreset } from "./renderer";
-import { isForced, resolveTheme } from "./theme";
+import { BrainRenderer, type ColorOverrides, type ViewPreset } from "./renderer";
+import type { Rebuild } from "./settings";
+import { isForced, resolveTheme, themeKey } from "./theme";
+import {
+	PALETTE_NAMES,
+	matchRegionColors,
+	regionKey,
+	regionsOf,
+	resolveNoteColors,
+	type PaletteId,
+	type Region,
+} from "./colors";
 
 export const VIEW_TYPE_BRAIN = "brain-graph-view";
 
@@ -17,8 +27,13 @@ export class BrainGraphView extends ItemView {
 	/** Renomeações desde o último rebuild (caminho antigo -> novo), para a nota manter a posição. */
 	private readonly renames = new Map<string, string>();
 	private savedCount = 0;
-	/** Tema aplicado (tipo + fundo), para não repintar a cada css-change sem mudança real. */
+	/** Tema aplicado (tipo + fundo + paleta), para não repintar a cada css-change sem mudança real. */
 	private themeKey = "";
+	private regions: Region[] = [];
+	/** Para cada cor salva da legenda, a região em que ela caiu no último rebuild (null = não encontrada). */
+	private regionFound: (number | null)[] = [];
+	private legendEl?: HTMLElement;
+	private legendOpen = false;
 
 	private readonly scheduleRebuild = debounce(() => this.rebuild(false), 1500, true);
 
@@ -45,12 +60,13 @@ export class BrainGraphView extends ItemView {
 		const stage = root.createDiv({ cls: "brain-graph-stage" });
 		this.buildToolbar(root);
 
-		const theme = resolveTheme(this.plugin.settings.appearance, root);
-		this.themeKey = theme.kind + theme.bg.getHexString();
+		const theme = resolveTheme(this.plugin.settings.appearance, root, this.plugin.settings.palette);
+		this.themeKey = themeKey(theme);
 		root.toggleClass("is-light", theme.kind === "light");
 		root.toggleClass("is-forced", isForced(this.plugin.settings.appearance, root));
 		this.renderer = new BrainRenderer(stage, { ...this.plugin.settings }, {
 			onNodeClick: (i, evt) => void this.openNode(i, evt),
+			onNodeContextMenu: (i, evt) => this.nodeMenu(i, evt),
 			onRestChange: (resting) => root.toggleClass("is-resting", resting),
 			onLayoutSettled: (moved) => {
 				// Salva quando algo mudou (layout novo, notas novas ou removidas).
@@ -98,11 +114,12 @@ export class BrainGraphView extends ItemView {
 	}
 
 	/** Chamado pelo plugin quando as configurações mudam. */
-	applySettings(rebuild: false | "keep" | "fresh"): void {
+	applySettings(rebuild: Rebuild): void {
 		this.renderer?.setOptions({ ...this.plugin.settings });
 		this.applyTheme();
 		this.refreshButtons();
-		if (rebuild) this.rebuild(rebuild === "fresh");
+		if (rebuild === "colors") this.recolor();
+		else if (rebuild) this.rebuild(rebuild === "fresh");
 	}
 
 	/**
@@ -130,10 +147,29 @@ export class BrainGraphView extends ItemView {
 		this.graph = graph;
 		this.files = graph.source.map((i) => all[i]);
 		this.searchIndex = new Map(graph.names.map((name, i) => [name.toLowerCase(), i]));
-		this.renderer.setGraph(graph, prev);
+		this.regions = regionsOf(graph, s.groupBy);
+		this.renderer.setGraph(graph, prev, this.colorOverrides());
 		this.syncActive();
+		this.renderLegend();
 		const links = graph.edges.length / 2;
 		this.statsEl?.setText(`${graph.ids.length} notes · ${links} links · ${graph.groupCount} regions`);
+	}
+
+	/** Recolore sem refazer o grafo (paleta, regras, propriedade ou cores da legenda mudaram). */
+	recolor(): void {
+		if (!this.renderer || !this.graph) return;
+		this.renderer.setColorOverrides(this.colorOverrides());
+		this.renderLegend();
+	}
+
+	/** Cores do usuário para o grafo atual: regiões pintadas na legenda e notas (regras, frontmatter). */
+	private colorOverrides(): ColorOverrides {
+		const s = this.plugin.settings;
+		const g = this.graph!;
+		const match = matchRegionColors(g, this.regions, s.regionColors, s.groupBy);
+		this.regionFound = match.found;
+		const notes = s.colorRules.length || s.colorProperty.trim() ? this.files.map((f) => this.plugin.noteInfo(f)) : [];
+		return { regions: match.byGroup, nodes: resolveNoteColors(notes, s.colorRules) };
 	}
 
 	private readonly saveLayout = debounce(
@@ -149,14 +185,138 @@ export class BrainGraphView extends ItemView {
 
 	private applyTheme(): void {
 		if (!this.renderer) return;
-		const appearance = this.plugin.settings.appearance;
-		const theme = resolveTheme(appearance, this.contentEl);
+		const { appearance, palette } = this.plugin.settings;
+		const theme = resolveTheme(appearance, this.contentEl, palette);
 		this.contentEl.toggleClass("is-forced", isForced(appearance, this.contentEl));
-		const key = theme.kind + theme.bg.getHexString();
+		const key = themeKey(theme);
 		if (key === this.themeKey) return;
 		this.themeKey = key;
 		this.contentEl.toggleClass("is-light", theme.kind === "light");
 		this.renderer.setTheme(theme);
+		this.renderLegend();
+	}
+
+	// ---------- Legenda de regiões ----------
+
+	/** Regiões listadas na legenda; as menores ficam de fora (a região pedida pelo menu entra sempre). */
+	private static readonly LEGEND_MAX = 40;
+
+	private toggleLegend(open = !this.legendOpen): void {
+		this.legendOpen = open;
+		this.buttons.legend?.toggleClass("is-active", open);
+		this.legendEl?.toggleClass("is-hidden", !open);
+		if (!open) this.renderer?.setHighlight([]);
+		this.renderLegend();
+	}
+
+	/** Redesenha a legenda (se aberta). @returns o seletor de cor de `focusGroup`, se pedido. */
+	private renderLegend(focusGroup?: number): HTMLInputElement | undefined {
+		const el = this.legendEl;
+		const renderer = this.renderer;
+		if (!el || !renderer || !this.legendOpen) return undefined;
+		el.empty();
+		const s = this.plugin.settings;
+
+		const head = el.createDiv({ cls: "brain-graph-legend-head" });
+		head.createSpan({ cls: "brain-graph-legend-title", text: "Regions" });
+		const select = head.createEl("select", { cls: "dropdown brain-graph-legend-palette", attr: { "aria-label": "Color palette" } });
+		for (const [id, name] of Object.entries(PALETTE_NAMES)) select.createEl("option", { value: id, text: name });
+		select.value = s.palette;
+		select.addEventListener("change", () => {
+			s.palette = select.value as PaletteId;
+			void this.plugin.saveSettings("colors");
+		});
+
+		const custom = new Set(this.regionFound.filter((g): g is number => g !== null));
+		const linked = this.regions.filter((r) => r.group >= 0);
+		const shown = linked.slice(0, BrainGraphView.LEGEND_MAX);
+		if (focusGroup !== undefined && focusGroup >= 0 && !shown.some((r) => r.group === focusGroup))
+			shown.push(...linked.filter((r) => r.group === focusGroup));
+		const orphans = this.regions.find((r) => r.group < 0);
+		if (orphans) shown.push(orphans);
+
+		const list = el.createDiv({ cls: "brain-graph-legend-list" });
+		list.addEventListener("mouseleave", () => renderer.setHighlight([]));
+		let focusInput: HTMLInputElement | undefined;
+		for (const region of shown) {
+			const row = list.createDiv({ cls: "brain-graph-legend-row" });
+			row.addEventListener("mouseenter", () => renderer.setHighlight(region.members));
+			const input = row.createEl("input", {
+				cls: "brain-graph-legend-swatch",
+				attr: { type: "color", "aria-label": `Color of ${region.name}` },
+			});
+			input.value = renderer.regionSwatch(region.group);
+			// Ao vivo enquanto o seletor é arrastado; grava ao confirmar.
+			input.addEventListener("input", () => this.paintRegion(region, input.value, false));
+			input.addEventListener("change", () => this.paintRegion(region, input.value, true));
+			row.createSpan({ cls: "brain-graph-legend-name", text: region.name, attr: { title: region.name } });
+			row.createSpan({ cls: "brain-graph-legend-count", text: String(region.members.length) });
+			if (custom.has(region.group)) {
+				const reset = row.createEl("button", {
+					cls: "clickable-icon brain-graph-legend-reset",
+					attr: { "aria-label": "Back to the palette color" },
+				});
+				setIcon(reset, "rotate-ccw");
+				reset.addEventListener("click", () => this.resetRegion(region));
+			}
+			if (region.group === focusGroup) focusInput = input;
+		}
+		const hidden = linked.length - shown.filter((r) => r.group >= 0).length;
+		if (hidden > 0) list.createDiv({ cls: "brain-graph-legend-more", text: `+${hidden} smaller regions` });
+		const lost = this.regionFound.filter((g) => g === null).length;
+		if (lost > 0)
+			el.createDiv({
+				cls: "brain-graph-legend-more",
+				text: `${lost} painted ${lost === 1 ? "region was" : "regions were"} not found (reset in settings)`,
+			});
+		return focusInput;
+	}
+
+	/** Pinta uma região: substitui a cor que já caía nela. `persist` = grava (fim da escolha). */
+	private paintRegion(region: Region, hex: string, persist: boolean): void {
+		const s = this.plugin.settings;
+		s.regionColors = s.regionColors.filter((_, k) => this.regionFound[k] !== region.group);
+		s.regionColors.push(regionKey(region, hex));
+		if (persist) void this.plugin.saveSettings("colors");
+		else this.renderer?.setColorOverrides(this.colorOverrides());
+	}
+
+	private resetRegion(region: Region): void {
+		const s = this.plugin.settings;
+		s.regionColors = s.regionColors.filter((_, k) => this.regionFound[k] !== region.group);
+		void this.plugin.saveSettings("colors");
+	}
+
+	private nodeMenu(i: number, evt: MouseEvent): void {
+		const group = this.graph?.group[i];
+		if (group === undefined) return;
+		const menu = new Menu();
+		menu.addItem((item) =>
+			item
+				.setTitle("Color this region…")
+				.setIcon("palette")
+				.onClick(() => {
+					this.toggleLegend(true);
+					const input = this.renderLegend(group);
+					if (!input) return;
+					input.scrollIntoView({ block: "nearest" });
+					// O clique no menu conta como gesto do usuário: o seletor nativo pode abrir.
+					try {
+						input.showPicker();
+					} catch {
+						input.click();
+					}
+				}),
+		);
+		const file = this.files[i];
+		if (file)
+			menu.addItem((item) =>
+				item
+					.setTitle("Open in new tab")
+					.setIcon("file-plus")
+					.onClick(() => void this.app.workspace.getLeaf("tab").openFile(file)),
+			);
+		menu.showAtMouseEvent(evt);
 	}
 
 	private syncActive(): void {
@@ -204,6 +364,11 @@ export class BrainGraphView extends ItemView {
 		toggle("glow", "sparkles", "Node glow");
 		toggle("ambientPulses", "activity", "Ambient pulses");
 
+		const legend = bar.createEl("button", { cls: "brain-graph-btn", attr: { "aria-label": "Region colors" } });
+		setIcon(legend, "palette");
+		legend.onclick = () => this.toggleLegend();
+		this.buttons.legend = legend;
+
 		const search = bar.createEl("input", {
 			cls: "brain-graph-search",
 			attr: { type: "search", placeholder: "Search notes…", spellcheck: "false" },
@@ -222,6 +387,7 @@ export class BrainGraphView extends ItemView {
 		});
 
 		this.statsEl = bar.createDiv({ cls: "brain-graph-stats" });
+		this.legendEl = root.createDiv({ cls: "brain-graph-legend is-hidden" });
 		this.perfEl = root.createDiv({ cls: "brain-graph-perf", text: "rotate the camera to measure fps" });
 		this.refreshButtons();
 	}

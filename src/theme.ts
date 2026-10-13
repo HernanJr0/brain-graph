@@ -1,5 +1,6 @@
 import { AdditiveBlending, Color, LinearSRGBColorSpace, NormalBlending, type Blending } from "three";
 import { ShellKind, type Shell, type SurfaceMesh, type Vec3 } from "./brain-shape";
+import { PALETTES, accentPalette, clampLightness, type PaletteDef, type PaletteId } from "./colors";
 
 export type ThemeKind = "dark" | "light";
 
@@ -33,6 +34,8 @@ export interface BrainTheme {
 	 * é convertido para linear e o nó aparece mais escuro e saturado que o hex.
 	 */
 	displayPalette: boolean;
+	/** Regiões além da paleta repetem as cores (paletas de matiz único ou de cores contadas). */
+	paletteCycle: boolean;
 	/** Luminosidade das regiões além da paleta (matiz pelo ângulo de ouro). */
 	extraLightness: number;
 	orphan: Color;
@@ -60,7 +63,7 @@ function lift(bg: Color, add: Vec3): Vec3 {
  * Luz sobre o fundo do tema: superfície um pouco acima do fundo, contornos claros,
  * regiões em tons luminosos e brilhos somados (aditivos).
  */
-export function darkTheme(bg: Color = new Color(DARK_BG)): BrainTheme {
+export function darkTheme(bg: Color = new Color(DARK_BG), palette: PaletteDef = PALETTES.nebula): BrainTheme {
 	return {
 		kind: "dark",
 		bg,
@@ -73,11 +76,9 @@ export function darkTheme(bg: Color = new Color(DARK_BG)): BrainTheme {
 		nodeRing: 0.6,
 		glowGain: 1,
 		rim: new Color(0.22, 0.23, 0.26),
-		displayPalette: false,
-		palette: [
-			"#5eead4", "#a78bfa", "#f472b6", "#60a5fa", "#fbbf24", "#34d399",
-			"#fb7185", "#38bdf8", "#c084fc", "#f59e0b", "#4ade80", "#e879f9",
-		],
+		displayPalette: palette.display ?? false,
+		paletteCycle: palette.cycle ?? false,
+		palette: palette.dark,
 		extraLightness: 0.62,
 		orphan: new Color("#8391b0"),
 		// frontal, parietal, occipital, temporal
@@ -110,7 +111,7 @@ export const LIGHT_BG = "#f7f8fb";
  * Ilustração anatômica em papel: fundo do tema, superfície de porcelana com bordas escurecendo,
  * contornos em grafite e regiões em tons saturados (que não somem no branco).
  */
-export function lightTheme(bg: Color = new Color(LIGHT_BG)): BrainTheme {
+export function lightTheme(bg: Color = new Color(LIGHT_BG), palette: PaletteDef = PALETTES.nebula): BrainTheme {
 	return {
 		kind: "light",
 		bg,
@@ -128,10 +129,8 @@ export function lightTheme(bg: Color = new Color(LIGHT_BG)): BrainTheme {
 		rim: new Color(-0.22, -0.2, -0.14),
 		// Tons pastel (400), exibidos como estão; o anel do nó dá o contorno.
 		displayPalette: true,
-		palette: [
-			"#2dd4bf", "#a78bfa", "#f472b6", "#60a5fa", "#f59e0b", "#34d399",
-			"#fb7185", "#38bdf8", "#c084fc", "#fb923c", "#4ade80", "#e879f9",
-		],
+		paletteCycle: palette.cycle ?? false,
+		palette: palette.light,
 		extraLightness: 0.6,
 		orphan: new Color().setStyle("#94a3b8", LinearSRGBColorSpace),
 		// Lobos dessaturados: os sulcos ficam em grafite levemente tingido, sem azul-marinho pesado.
@@ -170,7 +169,19 @@ export function obsidianThemeKind(doc: Document): ThemeKind {
  * próprio navegador converte: a cor é pintada num pixel de canvas e o RGB é lido de volta.
  */
 export function obsidianBackground(el: HTMLElement, fallback: string): Color {
-	const probe = el.createDiv({ cls: "brain-graph-bg-probe" });
+	return obsidianColor(el, "brain-graph-bg-probe", fallback);
+}
+
+/** Cor de destaque do tema do Obsidian (`--interactive-accent`). */
+export function obsidianAccent(el: HTMLElement): Color {
+	return obsidianColor(el, "brain-graph-accent-probe", ACCENT_FALLBACK);
+}
+
+const ACCENT_FALLBACK = "#7c3aed";
+
+/** Lê a cor de fundo que a classe `cls` (em styles.css) dá a uma sonda: o navegador resolve o formato. */
+function obsidianColor(el: HTMLElement, cls: string, fallback: string): Color {
+	const probe = el.createDiv({ cls });
 	const value = getComputedStyle(probe).backgroundColor;
 	// O canvas nasce dentro da sonda (mesmo documento da view) e continua usável depois de removido.
 	const canvas = probe.createEl("canvas");
@@ -193,12 +204,19 @@ export function isForced(appearance: Appearance, el: HTMLElement): boolean {
 	return appearance !== "auto" && appearance !== obsidianThemeKind(el.ownerDocument);
 }
 
-export function resolveTheme(appearance: Appearance, el: HTMLElement): BrainTheme {
+export function resolveTheme(appearance: Appearance, el: HTMLElement, paletteId: PaletteId = "nebula"): BrainTheme {
 	const obsidian = obsidianThemeKind(el.ownerDocument);
 	const kind = appearance === "auto" ? obsidian : appearance;
+	const palette = paletteId === "accent" ? accentPalette(obsidianAccent(el), kind) : (PALETTES[paletteId] ?? PALETTES.nebula);
 	// Modo forçado contrário ao do Obsidian: o fundo do tema não serve, usa o padrão do modo.
-	if (kind === "dark") return darkTheme(obsidian === "dark" ? obsidianBackground(el, DARK_BG) : new Color(DARK_BG));
-	return lightTheme(obsidian === "light" ? obsidianBackground(el, LIGHT_BG) : new Color(LIGHT_BG));
+	if (kind === "dark")
+		return darkTheme(obsidian === "dark" ? obsidianBackground(el, DARK_BG) : new Color(DARK_BG), palette);
+	return lightTheme(obsidian === "light" ? obsidianBackground(el, LIGHT_BG) : new Color(LIGHT_BG), palette);
+}
+
+/** Muda quando algo visível do tema muda (para não repintar a cada css-change sem mudança real). */
+export function themeKey(theme: BrainTheme): string {
+	return theme.kind + theme.bg.getHexString() + theme.palette.join("");
 }
 
 export function shellColors(
@@ -264,9 +282,22 @@ export function meshColors(
 
 export function groupColor(theme: BrainTheme, group: number): Color {
 	if (group < 0) return theme.orphan.clone();
-	if (group < theme.palette.length)
-		return theme.displayPalette
-			? new Color().setStyle(theme.palette[group], LinearSRGBColorSpace)
-			: new Color(theme.palette[group]);
+	if (group < theme.palette.length || theme.paletteCycle) {
+		const hex = theme.palette[group % theme.palette.length];
+		return theme.displayPalette ? new Color().setStyle(hex, LinearSRGBColorSpace) : new Color(hex);
+	}
 	return new Color().setHSL(((group * 137.508) % 360) / 360, 0.7, theme.extraLightness);
+}
+
+/**
+ * Cor escolhida pelo usuário, em valores de tela (o hex aparece como está nos dois modos). A luminosidade
+ * é limitada para a cor não sumir no fundo: no claro, nada mais claro que OKLab L 0,62; no escuro, nada
+ * mais escuro que 0,5.
+ */
+export function customColor(theme: BrainTheme, hex: string): Color {
+	const c = new Color().setStyle(hex, LinearSRGBColorSpace);
+	const rgb: [number, number, number] = [c.r, c.g, c.b];
+	if (theme.kind === "light") clampLightness(rgb, 0, 0.62);
+	else clampLightness(rgb, 0.5, 1);
+	return c.setRGB(rgb[0], rgb[1], rgb[2], LinearSRGBColorSpace);
 }

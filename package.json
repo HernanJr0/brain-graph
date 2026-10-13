@@ -1,12 +1,12 @@
 {
   "name": "brain-graph",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Lightweight 2D/3D brain-shaped graph view for Obsidian.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "deploy": "npm run build && node dev/deploy.mjs"
+    "deploy": "node dev/deploy.mjs"
   },
   "license": "MIT",
   "devDependencies": {

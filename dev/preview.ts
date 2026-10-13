@@ -3,17 +3,22 @@ import { mulberry32 } from "../src/brain-shape";
 import { buildGraphCore, type LinkMap } from "../src/graph-core";
 import { BrainRenderer } from "../src/renderer";
 import { isForced, resolveTheme, type Appearance } from "../src/theme";
+import * as colors from "../src/colors";
 
 // O renderer usa helpers de DOM que o Obsidian adiciona ao HTMLElement; fora dele, um polyfill mínimo.
 declare global {
 	interface HTMLElement {
 		createDiv(o?: { cls?: string }): HTMLDivElement;
+		createEl<K extends keyof HTMLElementTagNameMap>(tag: K, o?: { cls?: string }): HTMLElementTagNameMap[K];
 	}
 }
-HTMLElement.prototype.createDiv ??= function (this: HTMLElement, o?: { cls?: string }) {
-	const el = document.createElement("div");
+HTMLElement.prototype.createEl ??= function (this: HTMLElement, tag: string, o?: { cls?: string }) {
+	const el = document.createElement(tag);
 	if (o?.cls) el.className = o.cls;
 	return this.appendChild(el);
+} as HTMLElement["createEl"];
+HTMLElement.prototype.createDiv ??= function (this: HTMLElement, o?: { cls?: string }) {
+	return this.createEl("div", o);
 };
 
 const params = new URLSearchParams(location.search);
@@ -51,9 +56,11 @@ if (obsidian) {
 	if (bg) document.body.style.setProperty("--background-primary", bg.includes("(") ? bg : `#${bg}`);
 }
 const appearance = (params.get("theme") ?? (obsidian ? "auto" : "dark")) as Appearance;
-if (obsidian || appearance !== "dark") {
+// ?palette=aurora|ember|pastel|accent|okabe-ito (Nebula sem o parâmetro).
+const palette = (params.get("palette") ?? "nebula") as colors.PaletteId;
+if (obsidian || appearance !== "dark" || palette !== "nebula") {
 	const wrap = document.getElementById("wrap")!;
-	const theme = resolveTheme(appearance, wrap);
+	const theme = resolveTheme(appearance, wrap, palette);
 	wrap.classList.toggle("is-light", theme.kind === "light");
 	wrap.classList.toggle("is-forced", isForced(appearance, wrap));
 	r.setTheme(theme);
@@ -63,6 +70,8 @@ r.setGraph(g);
 const preset = params.get("view");
 if (preset) r.applyPreset(preset as "lateral");
 (window as any).brain = r;
+(window as any).graph = g;
+(window as any).colors = colors;
 document.getElementById("stats")!.textContent = `${g.ids.length} notas · ${g.edges.length / 2} links · ${g.groupCount} regiões`;
 window.addEventListener("resize", () => r.resize());
 (window as any).layoutDone = new Promise<number>((resolve) => {

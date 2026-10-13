@@ -7,6 +7,7 @@ import {
 	Fog,
 	LineBasicMaterial,
 	LineSegments,
+	LinearSRGBColorSpace,
 	Matrix4,
 	Mesh,
 	MOUSE,
@@ -32,7 +33,7 @@ import {
 } from "./brain-shape";
 import type { GraphCore } from "./graph-core";
 import { BrainLayout, type SavedPosition } from "./layout";
-import { darkTheme, groupColor, meshColors, shellColors, type BrainTheme } from "./theme";
+import { customColor, darkTheme, groupColor, meshColors, shellColors, type BrainTheme } from "./theme";
 
 export type ViewMode = "3d" | "2d";
 export type ViewPreset = "lateral" | "superior" | "frontal";
@@ -62,8 +63,20 @@ export interface RenderOptions {
 	idleOrbit: boolean;
 }
 
+/** Cores escolhidas pelo usuário (hex), por cima da paleta. A cor do nó vence a da região. */
+export interface ColorOverrides {
+	/** Região (índice do grupo; -1 = órfãs) -> cor. */
+	regions: Map<number, string>;
+	/** Nó -> cor (regras por pasta/tag e propriedade do frontmatter). */
+	nodes: Map<number, string>;
+}
+
+const NO_OVERRIDES: ColorOverrides = { regions: new Map(), nodes: new Map() };
+
 export interface RendererCallbacks {
 	onNodeClick?: (index: number, evt: MouseEvent) => void;
+	/** Clique direito num nó. */
+	onNodeContextMenu?: (index: number, evt: MouseEvent) => void;
 	/** Medidor de desempenho: chamado ~2x por segundo enquanto há frames sendo desenhados. */
 	onStats?: (stats: FrameStats) => void;
 	/** O layout terminou de se acomodar (`moved` = false se tudo veio pronto do cache). */
@@ -393,8 +406,13 @@ export class BrainRenderer {
 	private pulseLast = 0;
 	private readonly pulseColor = new Color();
 	private edges?: LineSegments;
+	/** Cor de cada região (índice + 1; 0 = órfãs) nos shaders e nos links. */
 	private colors: Color[] = [];
 	private edgeColors: Color[] = [];
+	private overrides: ColorOverrides = NO_OVERRIDES;
+	/** Cor de cada nó nos shaders (valores de tela) e nos links (linear), já com as cores do usuário. */
+	private nodeRGB = new Float32Array(0);
+	private nodeEdgeRGB = new Float32Array(0);
 	private edgeBase = new Float32Array(0);
 	private edgeCtrl = new Float32Array(0);
 	private edgeFocus = new Float32Array(0);
@@ -405,6 +423,8 @@ export class BrainRenderer {
 	private hover = -1;
 	private active = -1;
 	private search: number[] = [];
+	/** Região destacada pela legenda (do mais conectado ao menos). */
+	private highlight: number[] = [];
 	private labelSet: { i: number; cls: string }[] = [];
 
 	private width = 1;
@@ -524,14 +544,17 @@ export class BrainRenderer {
 
 	// ---------- API pública ----------
 
-	setGraph(graph: GraphCore, prev?: Map<string, SavedPosition>): void {
+	setGraph(graph: GraphCore, prev?: Map<string, SavedPosition>, overrides: ColorOverrides = NO_OVERRIDES): void {
 		this.graph = graph;
+		this.overrides = overrides;
 		this.setGroupColors();
+		this.computeNodeColors();
 		this.layout = new BrainLayout(graph, prev);
 		this.hover = -1;
 		this.pulseCount = 0;
 		this.buildAmbient();
 		this.search = [];
+		this.highlight = [];
 		this.active = -1;
 		this.buildNodes();
 		this.buildEdges();
@@ -593,20 +616,31 @@ export class BrainRenderer {
 			meshColors(this.meshData[k], theme, attr.array as Float32Array);
 			attr.needsUpdate = true;
 		});
-		const g = this.graph;
-		if (g && this.nodes) {
-			this.setGroupColors();
-			const attr = this.nodes.geometry.getAttribute("aColor") as BufferAttribute;
-			const colors = attr.array as Float32Array;
-			for (let i = 0; i < g.ids.length; i++) this.color(g.group[i]).toArray(colors, i * 3);
-			attr.needsUpdate = true;
-			for (let e = 0; e < g.edges.length / 2; e++) {
-				this.edgeColor(g.group[g.edges[e * 2]]).toArray(this.edgeBase, e * 6);
-				this.edgeColor(g.group[g.edges[e * 2 + 1]]).toArray(this.edgeBase, e * 6 + 3);
-			}
-			this.writeEdgeColors();
-			this.setupPulses();
-		}
+		this.setGroupColors();
+		this.applyNodeColors();
+		this.requestFrame();
+	}
+
+	/** Troca as cores escolhidas pelo usuário sem refazer layout nem geometria. */
+	setColorOverrides(overrides: ColorOverrides): void {
+		this.overrides = overrides;
+		this.applyNodeColors();
+		this.requestFrame();
+	}
+
+	/** Cor de uma região como aparece na tela (para a legenda): "#rrggbb". */
+	regionSwatch(group: number): string {
+		const custom = this.overrides.regions.get(group);
+		const c = custom ? customColor(this.theme, custom) : this.colors[group + 1];
+		if (!c) return "#000000";
+		// Os nós exibem estes valores sem conversão (na paleta escura, a versão linear do hex).
+		return "#" + c.getHexString(LinearSRGBColorSpace);
+	}
+
+	/** Destaca um conjunto de nós (região da legenda); vazio desfaz. Os primeiros ganham rótulo. */
+	setHighlight(indices: number[]): void {
+		this.highlight = indices;
+		this.refreshFocus();
 		this.requestFrame();
 	}
 
@@ -680,16 +714,6 @@ export class BrainRenderer {
 
 	// ---------- Cena ----------
 
-	/** Cor da região nos materiais de shader (nós, halos, pulsos), que escrevem a cor sem conversão. */
-	private color(group: number): Color {
-		return this.colors[group + 1];
-	}
-
-	/** Cor da região nos links (LineBasicMaterial, que converte linear -> sRGB na saída). */
-	private edgeColor(group: number): Color {
-		return this.edgeColors[group + 1];
-	}
-
 	private get additiveGlow(): boolean {
 		return this.theme.glowBlending === AdditiveBlending;
 	}
@@ -701,6 +725,64 @@ export class BrainRenderer {
 		this.edgeColors = this.theme.displayPalette
 			? this.colors.map((c) => c.clone().convertSRGBToLinear())
 			: this.colors;
+	}
+
+	/**
+	 * Cor de cada nó: a do nó (regras, frontmatter), a da região escolhida na legenda ou a da paleta.
+	 * Nós e halos usam a cor de tela; os links (LineBasicMaterial, que converte linear -> sRGB) a linear.
+	 */
+	private computeNodeColors(): void {
+		const g = this.graph;
+		if (!g) return;
+		const n = g.ids.length;
+		if (this.nodeRGB.length !== n * 3) {
+			this.nodeRGB = new Float32Array(n * 3);
+			this.nodeEdgeRGB = new Float32Array(n * 3);
+		}
+		const custom = new Map<string, [Color, Color]>();
+		const { regions, nodes } = this.overrides;
+		for (let i = 0; i < n; i++) {
+			const group = g.group[i];
+			const hex = nodes.get(i) ?? regions.get(group);
+			let screen = this.colors[group + 1];
+			let edge = this.edgeColors[group + 1];
+			if (hex) {
+				let pair = custom.get(hex);
+				if (!pair) {
+					const c = customColor(this.theme, hex);
+					pair = [c, c.clone().convertSRGBToLinear()];
+					custom.set(hex, pair);
+				}
+				[screen, edge] = pair;
+			}
+			screen.toArray(this.nodeRGB, i * 3);
+			edge.toArray(this.nodeEdgeRGB, i * 3);
+		}
+	}
+
+	/** Recalcula as cores dos nós e repinta nós, halos, links e pulsos. */
+	private applyNodeColors(): void {
+		this.computeNodeColors();
+		if (!this.nodes) return;
+		const attr = this.nodes.geometry.getAttribute("aColor") as BufferAttribute;
+		(attr.array as Float32Array).set(this.nodeRGB);
+		attr.needsUpdate = true;
+		this.fillEdgeBase();
+		this.writeEdgeColors();
+		this.setupPulses();
+	}
+
+	/** Cor das duas pontas de cada link (gradiente de uma região para a outra). */
+	private fillEdgeBase(): void {
+		const g = this.graph;
+		if (!g) return;
+		const src = this.nodeEdgeRGB;
+		for (let e = 0; e < g.edges.length / 2; e++) {
+			const a = g.edges[e * 2] * 3;
+			const b = g.edges[e * 2 + 1] * 3;
+			this.edgeBase.set(src.subarray(a, a + 3), e * 6);
+			this.edgeBase.set(src.subarray(b, b + 3), e * 6 + 3);
+		}
 	}
 
 	/** Fundo, névoa, uniforms de cor e blending dos brilhos. */
@@ -800,10 +882,9 @@ export class BrainRenderer {
 			this.nodes.geometry.dispose();
 		}
 		const n = g.ids.length;
-		const colors = new Float32Array(n * 3);
+		const colors = new Float32Array(this.nodeRGB);
 		const sizes = new Float32Array(n);
 		for (let i = 0; i < n; i++) {
-			this.color(g.group[i]).toArray(colors, i * 3);
 			sizes[i] = Math.min(0.09, 0.018 * this.opts.nodeSize * (0.8 + 0.4 * Math.sqrt(g.degree[i])));
 		}
 		this.view = new Float32Array(n * 3);
@@ -834,10 +915,7 @@ export class BrainRenderer {
 		this.edgeCtrl = new Float32Array(m * 3);
 		this.edgeFocus = new Float32Array(m).fill(1);
 		this.edgeLen = new Float32Array(m);
-		for (let e = 0; e < m; e++) {
-			this.edgeColor(g.group[g.edges[e * 2]]).toArray(this.edgeBase, e * 6);
-			this.edgeColor(g.group[g.edges[e * 2 + 1]]).toArray(this.edgeBase, e * 6 + 3);
-		}
+		this.fillEdgeBase();
 		const geo = new BufferGeometry();
 		geo.setAttribute("position", new BufferAttribute(new Float32Array(verts * 3), 3));
 		geo.setAttribute("color", new BufferAttribute(new Float32Array(verts * 3), 3));
@@ -1175,7 +1253,7 @@ export class BrainRenderer {
 			const e = this.ambEdge[p];
 			const dir = this.ambDir[p];
 			const head = this.ambT[p];
-			col.copy(this.color(g.group[g.edges[e * 2 + 1 - dir]])).lerp(this.theme.pulseTint, this.ambGen[p] > 0 ? 0.6 : 0.35);
+			col.fromArray(this.nodeRGB, g.edges[e * 2 + 1 - dir] * 3).lerp(this.theme.pulseTint, this.ambGen[p] > 0 ? 0.6 : 0.35);
 			if (this.ambGen[p] > 0 && additive) col.multiplyScalar(1.5); // reação em cadeia: mais brilhante
 			const env = Math.sin(Math.PI * head);
 			for (let k = 0; k < PULSE_TRAIL; k++) {
@@ -1223,7 +1301,7 @@ export class BrainRenderer {
 			this.pulseT[p] = (p * 0.37) % 1; // fases espalhadas: não saem todos juntos
 		});
 		this.pulseCount = edges.length;
-		this.pulseColor.copy(this.color(g.group[h])).lerp(this.theme.pulseTint, 0.45);
+		this.pulseColor.fromArray(this.nodeRGB, h * 3).lerp(this.theme.pulseTint, 0.45);
 	}
 
 	/** Avança os pulsos. Retorna true se precisa de mais frames. */
@@ -1423,7 +1501,9 @@ export class BrainRenderer {
 
 	private readonly onPointerUp = (evt: PointerEvent): void => {
 		const moved = Math.hypot(evt.clientX - this.downX, evt.clientY - this.downY);
-		if (moved < 5 && this.hover >= 0 && evt.button !== 2) this.callbacks.onNodeClick?.(this.hover, evt);
+		if (moved >= 5 || this.hover < 0) return;
+		if (evt.button === 2) this.callbacks.onNodeContextMenu?.(this.hover, evt);
+		else this.callbacks.onNodeClick?.(this.hover, evt);
 	};
 
 	/**
@@ -1507,6 +1587,10 @@ export class BrainRenderer {
 			for (const j of nb) hl[j] = 0.7;
 			labels.push({ i: this.hover, cls: "is-hover" });
 			for (const j of nb.slice(0, 25)) labels.push({ i: j, cls: "" });
+		} else if (this.highlight.length) {
+			focus = 1;
+			for (const i of this.highlight) hl[i] = 1;
+			for (const i of this.highlight.slice(0, 12)) labels.push({ i, cls: "" });
 		} else if (this.search.length) {
 			focus = 1;
 			for (const i of this.search) hl[i] = 1;
