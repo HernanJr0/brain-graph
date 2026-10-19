@@ -387,6 +387,7 @@ export class BrainRenderer {
 	private readonly ambAlive = new Uint8Array(AMBIENT_MAX);
 	private readonly ambGen = new Uint8Array(AMBIENT_MAX);
 	private burstTimer = BURST_MIN_S;
+	private audioLevel = 0;
 	private burstCursor = 0;
 	/** Brilho de cada neurônio (atributo aFlash dos nós) e o alvo que ele persegue. */
 	private flash: Float32Array = new Float32Array(0);
@@ -654,6 +655,11 @@ export class BrainRenderer {
 		this.search = indices;
 		this.refreshFocus();
 		this.requestFrame();
+	}
+
+	/** Nível de áudio (0–1) que faz o cérebro respirar mais forte; usado pelo wallpaper. */
+	setAudioLevel(level: number): void {
+		this.audioLevel = Math.max(0, Math.min(1, level));
 	}
 
 	/** Interação fora do canvas (barra, busca, teclado): sai da tela de descanso. */
@@ -1149,6 +1155,11 @@ export class BrainRenderer {
 		this.burstTimer -= dt;
 		if (this.burstTimer > 0) return;
 		this.burstTimer = BURST_MIN_S + this.ambRng() * (BURST_MAX_S - BURST_MIN_S);
+		this.burst();
+	}
+
+	/** Dispara uma reação em cadeia a partir de uma nota bem conectada. */
+	burst(): void {
 		const g = this.graph;
 		if (!g || g.ids.length === 0) return;
 		let node = -1;
@@ -1442,8 +1453,8 @@ export class BrainRenderer {
 			m.uniforms.uTime.value = this.idleTime;
 			m.uniforms.uIdle.value = this.idleMix;
 		}
-		this.haloMat.uniforms.uBreath.value = breath * 0.35;
-		this.surfaceMat.uniforms.uRim.value = 1 + breath * 0.3;
+		this.haloMat.uniforms.uBreath.value = breath * 0.35 + this.audioLevel * 0.6;
+		this.surfaceMat.uniforms.uRim.value = 1 + breath * 0.3 + this.audioLevel * 0.5;
 		// Precisa de frames enquanto a animação estiver ligada (repouso chega sozinho) ou em transição.
 		return this.opts.idleAnimation || this.idleMix > 0;
 	}

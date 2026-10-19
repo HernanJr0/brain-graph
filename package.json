@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build:wallpaper": "tsc -noEmit -skipLibCheck && node wallpaper/build.mjs",
     "deploy": "node dev/deploy.mjs"
   },
   "license": "MIT",

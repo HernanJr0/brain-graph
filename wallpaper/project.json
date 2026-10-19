@@ -1,0 +1,28 @@
+{
+  "file": "index.html",
+  "title": "Brain Graph",
+  "description": "Um cérebro 3D feito de notas e links, reagindo à música.",
+  "type": "web",
+  "tags": ["Abstract", "Relaxing"],
+  "general": {
+    "properties": {
+      "schemecolor": { "order": 0, "text": "ui_browse_properties_scheme_color", "type": "color", "value": "0.1 0.14 0.3" },
+      "palette": {
+        "order": 1,
+        "text": "Paleta",
+        "type": "combo",
+        "value": "nebula",
+        "options": [
+          { "label": "Nebula", "value": "nebula" },
+          { "label": "Aurora", "value": "aurora" },
+          { "label": "Ember", "value": "ember" },
+          { "label": "Pastel", "value": "pastel" },
+          { "label": "Okabe-Ito", "value": "okabe-ito" }
+        ]
+      },
+      "audiogain": { "order": 2, "text": "Sensibilidade ao áudio", "type": "slider", "value": 1, "min": 0, "max": 3, "step": 0.1 },
+      "glow": { "order": 3, "text": "Brilho (halo)", "type": "bool", "value": true },
+      "orbit": { "order": 4, "text": "Rotação automática", "type": "bool", "value": true }
+    }
+  }
+}
