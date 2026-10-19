@@ -43,15 +43,19 @@ const wrap = document.getElementById("wrap")!;
 const stage = document.getElementById("stage")!;
 const brain = new BrainRenderer(
 	stage,
-	{ mode: "3d", showCortex: true, nodeSize: 1, hubLabels: false, glow: true, hoverPulses: false, ambientPulses: true, ambientCount: 45, idleAnimation: true, surface: true, dof: true, idleOrbit: true },
+	{ mode: "3d", showCortex: true, nodeSize: 1, hubLabels: false, glow: true, hoverPulses: false, ambientPulses: true, ambientCount: 45, idleAnimation: true, surface: false, dof: true, idleOrbit: true },
 	{},
 );
+// Por padrão o mouse não mexe na câmera nem destaca nós (propriedade "mouse").
+brain.setInteractive(false);
+// Vista lateral levemente de baixo para cima (a órbita mantém a altura).
+brain.setCameraDirection(1, -0.28, 0.02);
 
 function applyPalette(id: PaletteId): void {
 	brain.setTheme(resolveTheme("dark", wrap, id));
 }
 
-brain.setGraph(demoGraph(Number(params.get("n") ?? 1500), 14));
+brain.setGraph(demoGraph(Number(params.get("n") ?? 250), 14));
 window.addEventListener("resize", () => brain.resize());
 
 // --- Áudio -----------------------------------------------------------------
@@ -76,6 +80,7 @@ function onAudio(samples: ArrayLike<number>): void {
 	if (bass * audioGain > 0.25 && bass > bassAvg * 1.5 && now - lastKick > 350) {
 		lastKick = now;
 		brain.burst();
+		brain.kick(Math.min(1, bass * audioGain * 1.5));
 	}
 	bassAvg += (bass - bassAvg) * 0.08;
 }
@@ -92,6 +97,8 @@ w.wallpaperPropertyListener = {
 		if (props.audiogain) audioGain = Number(props.audiogain.value);
 		if (props.glow) brain.setOptions({ glow: !!props.glow.value });
 		if (props.orbit) brain.setOptions({ idleOrbit: !!props.orbit.value });
+		if (props.surface) brain.setOptions({ surface: !!props.surface.value });
+		if (props.mouse) brain.setInteractive(!!props.mouse.value);
 	},
 };
 w.wallpaperRegisterAudioListener?.(onAudio);

@@ -192,6 +192,7 @@ uniform float uSizeScale;
 uniform float uTime;
 uniform float uIdle;
 uniform float uWave;
+uniform float uAudio;
 uniform float uDof;
 uniform float uDofNear;
 uniform float uDofFar;
@@ -210,7 +211,8 @@ void main() {
 	float px = uOrtho > 0.5 ? aSize * uScale : aSize * uScale / max(-mv.z, 0.001);
 	// Onda de atividade (repouso): faixa estreita que varre o cérebro de trás para a frente.
 	float wave = pow(0.5 + 0.5 * sin(uTime * 0.55 - position.z * 2.2 - position.y * 0.8), 4.0) * uIdle * uWave;
-	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.45 + aFlash * 0.9);
+	// Áudio (wallpaper): as notas incham e clareiam com o volume.
+	px *= (1.0 + aHighlight * 0.5) * uSizeScale * (1.0 + wave * 0.45 + aFlash * 0.9 + uAudio * 0.35);
 	gl_PointSize = clamp(px, uMinSize, uMaxSize) * (1.0 + vBlur * 1.6) * uPixelRatio;
 	// LOD: halos e pulsos do fundo desfocado não são desenhados (zero custo de preenchimento).
 	if (uLodCull > 0.5 && vBlur > 0.6) {
@@ -219,7 +221,7 @@ void main() {
 	}
 	vDim = uFocus * (1.0 - step(0.5, aHighlight));
 	vAlpha = aAlpha;
-	vColor = mix(mix(aColor, uBg, vDim * 0.8), uFlash, clamp(wave * 0.55 + aFlash * 0.6, 0.0, 1.0));
+	vColor = mix(mix(aColor, uBg, vDim * 0.8), uFlash, clamp(wave * 0.55 + aFlash * 0.6 + uAudio * 0.2, 0.0, 1.0));
 }`;
 
 const FRAG = /* glsl */ `
@@ -271,6 +273,7 @@ function pointMaterial(minSize: number, depthWrite: boolean): ShaderMaterial {
 			uTime: { value: 0 },
 			uIdle: { value: 0 },
 			uWave: { value: 0 },
+			uAudio: { value: 0 },
 			uDof: { value: 0 },
 			uDofNear: { value: 3 },
 			uDofFar: { value: 4 },
@@ -388,6 +391,9 @@ export class BrainRenderer {
 	private readonly ambGen = new Uint8Array(AMBIENT_MAX);
 	private burstTimer = BURST_MIN_S;
 	private audioLevel = 0;
+	/** Soco de zoom na batida (1 = auge, decai para 0) e o fator de distância já aplicado à câmera. */
+	private kickEnv = 0;
+	private kickApplied = 1;
 	private burstCursor = 0;
 	/** Brilho de cada neurônio (atributo aFlash dos nós) e o alvo que ele persegue. */
 	private flash: Float32Array = new Float32Array(0);
@@ -436,6 +442,8 @@ export class BrainRenderer {
 	private mouseX = 0;
 	private mouseY = 0;
 	private mouseInside = false;
+	/** Mouse controla câmera e hover; o wallpaper desliga para o cérebro seguir sozinho. */
+	private interactive = true;
 	private pickDirty = false;
 	private dragging = false;
 	private downX = 0;
@@ -662,9 +670,33 @@ export class BrainRenderer {
 		this.audioLevel = Math.max(0, Math.min(1, level));
 	}
 
+	/** Batida: a câmera dá um leve soco de zoom para dentro e volta (força 0–1); usado pelo wallpaper. */
+	kick(strength = 1): void {
+		this.kickEnv = Math.max(this.kickEnv, Math.max(0, Math.min(1, strength)));
+		this.requestFrame();
+	}
+
+	/** Liga/desliga o mouse (câmera, hover e clique); usado pelo wallpaper. */
+	setInteractive(on: boolean): void {
+		this.interactive = on;
+		this.controls.enabled = on;
+		if (!on) {
+			this.mouseInside = false;
+			this.pickDirty = true;
+			this.renderer.domElement.style.cursor = "";
+		}
+		this.requestFrame();
+	}
+
 	/** Interação fora do canvas (barra, busca, teclado): sai da tela de descanso. */
 	wake(): void {
 		this.markInteraction();
+		this.requestFrame();
+	}
+
+	/** Coloca a câmera na direção (x, y, z) a partir do centro; usado pelo wallpaper. */
+	setCameraDirection(x: number, y: number, z: number): void {
+		this.placeCamera(new Vector3(x, y, z).normalize());
 		this.requestFrame();
 	}
 
@@ -826,6 +858,7 @@ export class BrainRenderer {
 		this.controls?.dispose();
 		const c = new OrbitControls(this.camera, this.renderer.domElement);
 		c.target.copy(target);
+		c.enabled = this.interactive;
 		// Sem amortecimento: a câmera para no instante em que o mouse para (sem frames extras).
 		c.enableDamping = false;
 		c.rotateSpeed = 0.7;
@@ -1453,10 +1486,24 @@ export class BrainRenderer {
 			m.uniforms.uTime.value = this.idleTime;
 			m.uniforms.uIdle.value = this.idleMix;
 		}
+		this.updateKick(dt);
+		this.nodeMat.uniforms.uAudio.value = this.audioLevel;
+		this.haloMat.uniforms.uAudio.value = this.audioLevel;
 		this.haloMat.uniforms.uBreath.value = breath * 0.35 + this.audioLevel * 0.6;
 		this.surfaceMat.uniforms.uRim.value = 1 + breath * 0.3 + this.audioLevel * 0.5;
 		// Precisa de frames enquanto a animação estiver ligada (repouso chega sozinho) ou em transição.
-		return this.opts.idleAnimation || this.idleMix > 0;
+		return this.opts.idleAnimation || this.idleMix > 0 || this.kickEnv > 0;
+	}
+
+	/** Aproxima a câmera do alvo conforme o soco e desfaz o fator anterior (não acumula com zoom/órbita). */
+	private updateKick(dt: number): void {
+		if (this.kickEnv === 0 && this.kickApplied === 1) return;
+		this.kickEnv *= Math.exp(-dt * 5);
+		if (this.kickEnv < 0.002) this.kickEnv = 0;
+		const f = this.opts.mode === "3d" ? 1 - this.kickEnv * 0.06 : 1;
+		const t = this.controls.target;
+		this.camera.position.sub(t).multiplyScalar(f / this.kickApplied).add(t);
+		this.kickApplied = f;
 	}
 
 	private updateUniforms(): void {
@@ -1489,6 +1536,7 @@ export class BrainRenderer {
 	};
 
 	private readonly onPointerMove = (evt: PointerEvent): void => {
+		if (!this.interactive) return;
 		this.markInteraction();
 		this.mouseX = evt.offsetX;
 		this.mouseY = evt.offsetY;
@@ -1505,12 +1553,14 @@ export class BrainRenderer {
 	};
 
 	private readonly onPointerDown = (evt: PointerEvent): void => {
+		if (!this.interactive) return;
 		this.markInteraction();
 		this.downX = evt.clientX;
 		this.downY = evt.clientY;
 	};
 
 	private readonly onPointerUp = (evt: PointerEvent): void => {
+		if (!this.interactive) return;
 		const moved = Math.hypot(evt.clientX - this.downX, evt.clientY - this.downY);
 		if (moved >= 5 || this.hover < 0) return;
 		if (evt.button === 2) this.callbacks.onNodeContextMenu?.(this.hover, evt);
