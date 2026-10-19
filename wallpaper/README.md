@@ -21,7 +21,7 @@ A pasta `wallpaper/dist/` fica pronta (`index.html`, `wallpaper.js`, `styles.css
 
 ## O que verificar (e anotar)
 
-- Aparece algo? Se a tela ficar preta, abra o DevTools: em **Configurações → Geral**, defina a **CEF devtools port** (ex.: 9222), aplique o wallpaper e abra `http://localhost:9222` no Chrome/Edge. O clique direito na pré-visualização do editor não abre menu.
+- Aparece algo? Se a tela ficar preta, abra o DevTools: com o wallpaper aplicado, **Configurações → Avançado → CEF devtools → Open Devtools**. O clique direito na pré-visualização do editor não abre menu.
 - FPS e uso de GPU em 1080p e 4K (o renderer limita a ~30 fps quando só há pulsos ambientes).
 - `fetch('http://127.0.0.1:8080')` a partir do console funciona? (decide o desenho da ponte)
 - Escrever/ler `localStorage` persiste entre reinícios do Wallpaper Engine? (plano B do snapshot)
@@ -30,3 +30,15 @@ A pasta `wallpaper/dist/` fica pronta (`index.html`, `wallpaper.js`, `styles.css
 ## Testar no navegador
 
 Abra `wallpaper/dist/index.html`. `?audio=1` simula uma batida; `?n=600` muda o número de notas.
+
+## Resultados (19/10/2026, Windows 11, RTX 5060 Ti, 1080p)
+
+| Item | Resultado |
+|---|---|
+| Chromium embutido | 146 |
+| `fetch` para `127.0.0.1` | Funciona. A origem chega como `null` (`file://`): a ponte precisa responder com `Access-Control-Allow-Origin: *` |
+| `localStorage` entre reinícios | Persiste |
+| GPU com 250 notas | ~0,8% (contador por processo do Windows, wallpaper visível) |
+| GPU em 4K / FPS exato | Não medido |
+
+Com o desktop coberto por janela maximizada, o Wallpaper Engine pausa o wallpaper (0% de GPU).
